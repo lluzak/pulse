@@ -141,7 +141,6 @@ struct PRListView: View {
     @Bindable var gitHubService: GitHubService
     @State private var selectedTab: PRTab = .awaitingReview
     @State private var showingSettings = false
-    @State private var showingAbout = false
 
     enum PRTab: String, CaseIterable {
         case awaitingReview = "Awaiting Review"
@@ -208,14 +207,8 @@ struct PRListView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView(gitHubService: gitHubService, isPresented: $showingSettings)
         }
-        .sheet(isPresented: $showingAbout) {
-            AboutView(isPresented: $showingAbout)
-        }
         .onReceive(NotificationCenter.default.publisher(for: .openSettings)) { _ in
             showingSettings = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openAbout)) { _ in
-            showingAbout = true
         }
         .background {
             // Hidden button for Cmd+R keyboard shortcut
@@ -295,16 +288,31 @@ struct PRListView: View {
 
 // MARK: - Settings View
 
+enum SettingsTab: String, CaseIterable {
+    case account = "Account"
+    case repositories = "Repositories"
+    case notifications = "Notifications"
+    case about = "About"
+
+    var icon: String {
+        switch self {
+        case .account: return "person.circle.fill"
+        case .repositories: return "folder.fill"
+        case .notifications: return "bell.fill"
+        case .about: return "info.circle.fill"
+        }
+    }
+}
+
 struct SettingsView: View {
     @Bindable var gitHubService: GitHubService
     @Binding var isPresented: Bool
-
-    // Local state for polling interval (in minutes for the slider)
+    @State private var selectedTab: SettingsTab = .account
     @State private var pollingMinutes: Double = 5
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header with close button
             HStack {
                 Text("Settings")
                     .font(.headline)
@@ -317,118 +325,37 @@ struct SettingsView: View {
             }
             .padding()
 
-            Divider()
-
-            // Settings content
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    // Polling Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("Refresh Interval", systemImage: "clock.arrow.circlepath")
-                            .font(.headline)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Every \(Int(pollingMinutes)) minute\(Int(pollingMinutes) == 1 ? "" : "s")")
-                                    .font(.subheadline)
-                                Spacer()
-                            }
-
-                            Slider(value: $pollingMinutes, in: 1...30, step: 1) { editing in
-                                if !editing {
-                                    gitHubService.pollingInterval = pollingMinutes * 60
-                                }
-                            }
-
-                            Toggle("Auto-refresh enabled", isOn: $gitHubService.isPollingEnabled)
-                                .font(.subheadline)
-                        }
-                    }
-
-                    Divider()
-
-                    // Notifications Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("Notifications", systemImage: "bell.fill")
-                            .font(.headline)
-
-                        HStack {
-                            Text("Status:")
-                                .font(.subheadline)
-                            Text(notificationStatusText)
-                                .font(.subheadline)
-                                .foregroundStyle(notificationStatusColor)
-                        }
-
-                        if gitHubService.notificationStatus == .denied {
-                            Button("Open System Settings") {
-                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .font(.subheadline)
-                        }
-
-                        Button("Test Notification") {
-                            testNotification()
-                        }
-                        .font(.subheadline)
-                    }
-
-                    Divider()
-
-                    // Repository Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("Repositories", systemImage: "folder.fill")
-                            .font(.headline)
-
-                        Toggle("Monitor all accessible repositories", isOn: $gitHubService.monitorAllRepositories)
-                            .font(.subheadline)
-
-                        if !gitHubService.monitorAllRepositories {
-                            Text("Specific repository filtering coming soon...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Divider()
-
-                    // Account Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("Account", systemImage: "person.circle.fill")
-                            .font(.headline)
-
-                        if let user = gitHubService.currentUser {
-                            HStack {
-                                AsyncImage(url: URL(string: user.avatarURL)) { image in
-                                    image.resizable().scaledToFill()
-                                } placeholder: {
-                                    Color.gray
-                                }
-                                .frame(width: 24, height: 24)
-                                .clipShape(Circle())
-
-                                Text("@\(user.login)")
-                                    .font(.subheadline)
-
-                                Spacer()
-
-                                Button("Sign Out") {
-                                    gitHubService.signOut()
-                                    isPresented = false
-                                }
-                                .font(.subheadline)
-                            }
-                        }
+            // Tab bar
+            HStack(spacing: 0) {
+                ForEach(SettingsTab.allCases, id: \.self) { tab in
+                    SettingsTabButton(tab: tab, isSelected: selectedTab == tab) {
+                        selectedTab = tab
                     }
                 }
-                .padding()
             }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
 
             Divider()
 
-            // Footer with Quit button
+            // Tab content
+            Group {
+                switch selectedTab {
+                case .account:
+                    AccountTabView(gitHubService: gitHubService, isPresented: $isPresented)
+                case .repositories:
+                    RepositoriesTabView(gitHubService: gitHubService)
+                case .notifications:
+                    NotificationsTabView(gitHubService: gitHubService, pollingMinutes: $pollingMinutes)
+                case .about:
+                    AboutTabView()
+                }
+            }
+            .frame(maxHeight: .infinity)
+
+            Divider()
+
+            // Footer
             HStack {
                 Text("Pulse v1.0")
                     .font(.caption)
@@ -437,7 +364,6 @@ struct SettingsView: View {
                 Spacer()
 
                 Button {
-                    // Close sheet first, then quit after a brief delay
                     isPresented = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         NSApplication.shared.terminate(nil)
@@ -453,9 +379,189 @@ struct SettingsView: View {
             }
             .padding()
         }
-        .frame(width: 350, height: 450)
+        .frame(width: 350, height: 420)
         .onAppear {
             pollingMinutes = gitHubService.pollingInterval / 60
+        }
+    }
+}
+
+struct SettingsTabButton: View {
+    let tab: SettingsTab
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 20))
+                Text(tab.rawValue)
+                    .font(.caption2)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .foregroundStyle(isSelected ? .primary : .secondary)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Account Tab
+
+struct AccountTabView: View {
+    @Bindable var gitHubService: GitHubService
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if let user = gitHubService.currentUser {
+                    // User profile card
+                    HStack(spacing: 12) {
+                        AsyncImage(url: URL(string: user.avatarURL)) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: {
+                            Color.gray
+                        }
+                        .frame(width: 48, height: 48)
+                        .clipShape(Circle())
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(user.name ?? user.login)
+                                .font(.headline)
+                            Text("@\(user.login)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+                    }
+                    .padding()
+                    .background(Color.primary.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                    Divider()
+
+                    // Sign out
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Session")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        Button(action: {
+                            gitHubService.signOut()
+                            isPresented = false
+                        }) {
+                            HStack {
+                                Image(systemName: "rectangle.portrait.and.arrow.right")
+                                Text("Sign Out")
+                            }
+                        }
+                        .foregroundStyle(.red)
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+// MARK: - Repositories Tab
+
+struct RepositoriesTabView: View {
+    @Bindable var gitHubService: GitHubService
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Monitoring")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Monitor all accessible repositories", isOn: $gitHubService.monitorAllRepositories)
+
+                    if !gitHubService.monitorAllRepositories {
+                        Text("Specific repository filtering coming soon...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                    }
+                }
+
+                if gitHubService.monitorAllRepositories {
+                    Text("Pulse will check for PRs across all repositories you have access to.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+// MARK: - Notifications Tab
+
+struct NotificationsTabView: View {
+    @Bindable var gitHubService: GitHubService
+    @Binding var pollingMinutes: Double
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Notification status
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("System Notifications")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    HStack {
+                        Text("Status:")
+                        Text(notificationStatusText)
+                            .foregroundStyle(notificationStatusColor)
+                    }
+
+                    if gitHubService.notificationStatus == .denied {
+                        Button("Open System Settings") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                    }
+
+                    Button("Test Notification") {
+                        testNotification()
+                    }
+                }
+
+                Divider()
+
+                // Polling settings
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Auto-Refresh")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Enable auto-refresh", isOn: $gitHubService.isPollingEnabled)
+
+                    if gitHubService.isPollingEnabled {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Refresh every \(Int(pollingMinutes)) minute\(Int(pollingMinutes) == 1 ? "" : "s")")
+                                .font(.caption)
+
+                            Slider(value: $pollingMinutes, in: 1...30, step: 1) { editing in
+                                if !editing {
+                                    gitHubService.pollingInterval = pollingMinutes * 60
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding()
         }
     }
 
@@ -477,7 +583,6 @@ struct SettingsView: View {
             deletions: 23,
             changedFiles: 8
         )
-        // Send both full-screen and system notification
         gitHubService.sendNotification(for: [mockPR])
     }
 
@@ -500,79 +605,51 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - About View
+// MARK: - About Tab
 
-struct AboutView: View {
-    @Binding var isPresented: Bool
-
+struct AboutTabView: View {
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("About")
-                    .font(.headline)
-                Spacer()
-                Button(action: { isPresented = false }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding()
+        VStack(spacing: 16) {
+            Spacer()
 
-            Divider()
+            Image(systemName: "waveform.path.ecg")
+                .font(.system(size: 56))
+                .foregroundStyle(.blue)
 
-            // Content
-            VStack(spacing: 20) {
-                Spacer()
+            VStack(spacing: 4) {
+                Text("Pulse")
+                    .font(.title2)
+                    .fontWeight(.bold)
 
-                // App Icon
-                Image(systemName: "waveform.path.ecg")
-                    .font(.system(size: 64))
-                    .foregroundStyle(.blue)
-
-                // App Name & Version
-                VStack(spacing: 4) {
-                    Text("Pulse")
-                        .font(.title)
-                        .fontWeight(.bold)
-
-                    Text("Version 1.0")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                // Description
-                Text("A lightweight menu bar app for tracking\nGitHub Pull Requests awaiting your review.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-
-                Spacer()
-
-                // Links
-                VStack(spacing: 12) {
-                    Button(action: {
-                        if let url = URL(string: "https://github.com") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }) {
-                        Label("View on GitHub", systemImage: "link")
-                    }
-                    .buttonStyle(.link)
-                }
-
-                Spacer()
-
-                // Copyright
-                Text("Made with Swift & SwiftUI")
+                Text("Version 1.0")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
-            .padding()
+
+            Text("A lightweight menu bar app for tracking\nGitHub Pull Requests awaiting your review.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+
+            Spacer()
+
+            Button(action: {
+                if let url = URL(string: "https://github.com") {
+                    NSWorkspace.shared.open(url)
+                }
+            }) {
+                Label("View on GitHub", systemImage: "link")
+            }
+            .buttonStyle(.link)
+
+            Spacer()
+
+            Text("Made with Swift & SwiftUI")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
-        .frame(width: 300, height: 350)
+        .padding()
     }
 }
 

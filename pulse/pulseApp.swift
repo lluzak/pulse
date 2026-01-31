@@ -54,8 +54,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Create the context menu for right-click
         contextMenu = NSMenu()
-        contextMenu?.addItem(NSMenuItem(title: "About Pulse", action: #selector(openAbout), keyEquivalent: ""))
-        contextMenu?.addItem(NSMenuItem.separator())
         contextMenu?.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
         contextMenu?.addItem(NSMenuItem.separator())
         contextMenu?.addItem(NSMenuItem(title: "Quit Pulse", action: #selector(quitApp), keyEquivalent: "q"))
@@ -117,16 +115,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc func openAbout() {
-        NotificationCenter.default.post(name: .openAbout, object: nil)
-        // Show the popover if it's not visible
-        if let popover = popover, !popover.isShown {
-            if let button = statusItem?.button {
-                showPopover(relativeTo: button)
-            }
-        }
-    }
-
     @objc func quitApp() {
         NSApp.terminate(nil)
     }
@@ -146,7 +134,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Notification Names
 extension Notification.Name {
     static let openSettings = Notification.Name("openSettings")
-    static let openAbout = Notification.Name("openAbout")
     static let showPRNotification = Notification.Name("showPRNotification")
 }
 
