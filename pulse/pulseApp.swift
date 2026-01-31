@@ -74,6 +74,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Hide the dock icon and main window
         NSApp.setActivationPolicy(.accessory)
+
+        // Listen for settings notification from the gear button in popover
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openSettings),
+            name: .openSettings,
+            object: nil
+        )
     }
 
     @objc func handleStatusItemClick() {
@@ -105,14 +113,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openSettings() {
-        // Post notification to open settings
-        NotificationCenter.default.post(name: .openSettings, object: nil)
-        // Also show the popover if it's not visible
-        if let popover = popover, !popover.isShown {
-            if let button = statusItem?.button {
-                showPopover(relativeTo: button)
-            }
-        }
+        // Close the popover and show settings in independent window
+        closePopover()
+        SettingsWindowController.shared.show()
     }
 
     @objc func quitApp() {
@@ -215,6 +218,68 @@ class PRNotificationWindowController {
 
         // Simple immediate close - no animation to avoid crashes
         windowToClose.orderOut(nil)
+    }
+}
+
+// MARK: - Settings Window Controller
+
+class SettingsWindowController: NSObject, NSWindowDelegate {
+    static let shared = SettingsWindowController()
+
+    private var window: NSWindow?
+
+    func show() {
+        // If window already exists and is visible, bring it to front
+        if let existingWindow = window, existingWindow.isVisible {
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        // Close existing window if any
+        window?.close()
+
+        // Create settings view
+        let settingsView = SettingsWindowView(onClose: { [weak self] in
+            self?.dismiss()
+        })
+
+        // Calculate window position (center of screen)
+        let windowWidth: CGFloat = 380
+        let windowHeight: CGFloat = 480
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screenFrame = screen.visibleFrame
+        let windowX = screenFrame.midX - windowWidth / 2
+        let windowY = screenFrame.midY - windowHeight / 2
+
+        // Create the window
+        let window = NSWindow(
+            contentRect: NSRect(x: windowX, y: windowY, width: windowWidth, height: windowHeight),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+
+        window.contentViewController = NSHostingController(rootView: settingsView)
+        window.title = "Pulse Settings"
+        window.delegate = self
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        self.window = window
+    }
+
+    func dismiss() {
+        window?.close()
+        window = nil
+    }
+
+    // NSWindowDelegate
+    func windowWillClose(_ notification: Notification) {
+        window = nil
     }
 }
 

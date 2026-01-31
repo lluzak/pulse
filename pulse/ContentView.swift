@@ -140,7 +140,6 @@ struct GitHubAuthView: View {
 struct PRListView: View {
     @Bindable var gitHubService: GitHubService
     @State private var selectedTab: PRTab = .awaitingReview
-    @State private var showingSettings = false
 
     enum PRTab: String, CaseIterable {
         case awaitingReview = "Awaiting Review"
@@ -180,7 +179,8 @@ struct PRListView: View {
                     .disabled(gitHubService.isLoading)
 
                     Button(action: {
-                        showingSettings = true
+                        // Open settings in independent window
+                        NotificationCenter.default.post(name: .openSettings, object: nil)
                     }) {
                         Image(systemName: "gearshape")
                     }
@@ -203,12 +203,6 @@ struct PRListView: View {
 
             // Per-tab loading and content
             tabContent
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(gitHubService: gitHubService, isPresented: $showingSettings)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openSettings)) { _ in
-            showingSettings = true
         }
         .background {
             // Hidden button for Cmd+R keyboard shortcut
@@ -286,70 +280,42 @@ struct PRListView: View {
     }
 }
 
-// MARK: - Settings View
+// MARK: - Settings Window View (Independent Window)
 
-enum SettingsTab: String, CaseIterable {
-    case account = "Account"
-    case repositories = "Repositories"
-    case notifications = "Notifications"
-    case about = "About"
-
-    var icon: String {
-        switch self {
-        case .account: return "person.circle.fill"
-        case .repositories: return "folder.fill"
-        case .notifications: return "bell.fill"
-        case .about: return "info.circle.fill"
-        }
-    }
-}
-
-struct SettingsView: View {
-    @Bindable var gitHubService: GitHubService
-    @Binding var isPresented: Bool
+struct SettingsWindowView: View {
+    var gitHubService = GitHubService.shared
+    let onClose: () -> Void
     @State private var selectedTab: SettingsTab = .account
     @State private var pollingMinutes: Double = 5
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header with close button
-            HStack {
-                Text("Settings")
-                    .font(.headline)
-                Spacer()
-                Button(action: { isPresented = false }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding()
-
             // Tab bar
             HStack(spacing: 0) {
                 ForEach(SettingsTab.allCases, id: \.self) { tab in
                     SettingsTabButton(tab: tab, isSelected: selectedTab == tab) {
-                        selectedTab = tab
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            selectedTab = tab
+                        }
                     }
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
             .padding(.bottom, 8)
 
             Divider()
 
-            // Tab content
-            Group {
-                switch selectedTab {
-                case .account:
-                    AccountTabView(gitHubService: gitHubService, isPresented: $isPresented)
-                case .repositories:
-                    RepositoriesTabView(gitHubService: gitHubService)
-                case .notifications:
-                    NotificationsTabView(gitHubService: gitHubService, pollingMinutes: $pollingMinutes)
-                case .about:
-                    AboutTabView()
-                }
+            // Tab content with fixed height to prevent shifts
+            ZStack {
+                AccountWindowTabView(gitHubService: gitHubService, onClose: onClose)
+                    .opacity(selectedTab == .account ? 1 : 0)
+                RepositoriesTabView(gitHubService: gitHubService)
+                    .opacity(selectedTab == .repositories ? 1 : 0)
+                NotificationsTabView(gitHubService: gitHubService, pollingMinutes: $pollingMinutes)
+                    .opacity(selectedTab == .notifications ? 1 : 0)
+                AboutTabView()
+                    .opacity(selectedTab == .about ? 1 : 0)
             }
             .frame(maxHeight: .infinity)
 
@@ -364,7 +330,7 @@ struct SettingsView: View {
                 Spacer()
 
                 Button {
-                    isPresented = false
+                    onClose()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         NSApplication.shared.terminate(nil)
                     }
@@ -379,41 +345,16 @@ struct SettingsView: View {
             }
             .padding()
         }
-        .frame(width: 350, height: 420)
         .onAppear {
             pollingMinutes = gitHubService.pollingInterval / 60
         }
     }
 }
 
-struct SettingsTabButton: View {
-    let tab: SettingsTab
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: tab.icon)
-                    .font(.system(size: 20))
-                Text(tab.rawValue)
-                    .font(.caption2)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
-            .foregroundStyle(isSelected ? .primary : .secondary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Account Tab
-
-struct AccountTabView: View {
+// Account tab for window (uses onClose instead of isPresented binding)
+struct AccountWindowTabView: View {
     @Bindable var gitHubService: GitHubService
-    @Binding var isPresented: Bool
+    let onClose: () -> Void
 
     var body: some View {
         ScrollView {
@@ -453,7 +394,7 @@ struct AccountTabView: View {
 
                         Button(action: {
                             gitHubService.signOut()
-                            isPresented = false
+                            onClose()
                         }) {
                             HStack {
                                 Image(systemName: "rectangle.portrait.and.arrow.right")
@@ -466,6 +407,48 @@ struct AccountTabView: View {
             }
             .padding()
         }
+    }
+}
+
+// MARK: - Settings Tab Enum
+
+enum SettingsTab: String, CaseIterable {
+    case account = "Account"
+    case repositories = "Repositories"
+    case notifications = "Notifications"
+    case about = "About"
+
+    var icon: String {
+        switch self {
+        case .account: return "person.circle.fill"
+        case .repositories: return "folder.fill"
+        case .notifications: return "bell.fill"
+        case .about: return "info.circle.fill"
+        }
+    }
+}
+
+struct SettingsTabButton: View {
+    let tab: SettingsTab
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 20))
+                Text(tab.rawValue)
+                    .font(.caption2)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .foregroundStyle(isSelected ? .primary : .secondary)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
