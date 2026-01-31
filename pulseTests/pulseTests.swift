@@ -8,29 +8,272 @@
 import XCTest
 @testable import pulse
 
-final class pulseTests: XCTestCase {
+// MARK: - GitHub Service Tests
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+final class GitHubServiceTests: XCTestCase {
+    
+    func testInitialState() {
+        let service = GitHubService()
+        
+        // On init, PR arrays should always be empty
+        // (isAuthenticated might be true if token exists in keychain)
+        XCTAssertTrue(service.awaitingReviewPRs.isEmpty)
+        XCTAssertTrue(service.involvedPRs.isEmpty)
+        
+        // hasLoadedOnce should be false initially
+        XCTAssertFalse(service.hasLoadedOnce)
     }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    
+    func testPollingDefaults() {
+        let service = GitHubService()
+        
+        XCTAssertTrue(service.isPollingEnabled)
+        XCTAssertEqual(service.pollingInterval, 300) // 5 minutes
     }
-
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
+    
+    func testRepositoryMonitoringDefaults() {
+        let service = GitHubService()
+        
+        XCTAssertTrue(service.monitorAllRepositories)
+        XCTAssertTrue(service.monitoredRepositories.isEmpty)
     }
-
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        self.measure {
-            // Put the code you want to measure the time of here.
-        }
+    
+    func testSignOut() {
+        let service = GitHubService()
+        
+        // Simulate authenticated state
+        service.personalAccessToken = "test_token"
+        service.currentUser = GitHubUser(
+            login: "testuser",
+            id: 123,
+            avatarURL: "https://example.com/avatar.jpg",
+            name: "Test User"
+        )
+        service.awaitingReviewPRs = [createMockPR(id: 1)]
+        service.involvedPRs = [createMockPR(id: 2)]
+        
+        // Sign out
+        service.signOut()
+        
+        // Verify everything is cleared
+        XCTAssertNil(service.personalAccessToken)
+        XCTAssertNil(service.currentUser)
+        XCTAssertTrue(service.awaitingReviewPRs.isEmpty)
+        XCTAssertTrue(service.involvedPRs.isEmpty)
     }
-
 }
+
+// MARK: - GitHub Models Tests
+
+final class GitHubModelsTests: XCTestCase {
+    
+    func testGitHubUserDecoding() throws {
+        let json = """
+        {
+            "login": "octocat",
+            "id": 1,
+            "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+            "name": "The Octocat"
+        }
+        """
+        
+        let data = json.data(using: .utf8)!
+        let user = try JSONDecoder().decode(GitHubUser.self, from: data)
+        
+        XCTAssertEqual(user.login, "octocat")
+        XCTAssertEqual(user.id, 1)
+        XCTAssertEqual(user.avatarURL, "https://github.com/images/error/octocat_happy.gif")
+        XCTAssertEqual(user.name, "The Octocat")
+    }
+    
+    func testGitHubUserWithoutName() throws {
+        let json = """
+        {
+            "login": "octocat",
+            "id": 1,
+            "avatar_url": "https://github.com/images/error/octocat_happy.gif"
+        }
+        """
+        
+        let data = json.data(using: .utf8)!
+        let user = try JSONDecoder().decode(GitHubUser.self, from: data)
+        
+        XCTAssertEqual(user.login, "octocat")
+        XCTAssertNil(user.name)
+    }
+    
+    func testGitHubIssueRepositoryExtraction() {
+        let issue = GitHubIssue(
+            number: 123,
+            title: "Test PR",
+            repositoryURL: "https://api.github.com/repos/octocat/Hello-World"
+        )
+        
+        XCTAssertEqual(issue.repositoryOwner, "octocat")
+        XCTAssertEqual(issue.repositoryName, "Hello-World")
+    }
+    
+    func testPullRequestDateParsing() {
+        let pr = createMockPR(
+            id: 1,
+            createdAt: "2024-01-29T10:00:00Z",
+            updatedAt: "2024-01-29T15:30:00Z"
+        )
+        
+        // Just verify dates parse correctly without checking exact hours
+        // (to avoid timezone issues in tests)
+        XCTAssertNotNil(pr.createdDate)
+        XCTAssertNotNil(pr.updatedDate)
+        XCTAssertTrue(pr.updatedDate > pr.createdDate)
+        
+        // Verify year/month/day work correctly in UTC
+        let calendar = Calendar(identifier: .gregorian)
+        let timeZone = TimeZone(identifier: "UTC")!
+        let components = calendar.dateComponents(in: timeZone, from: pr.createdDate)
+        
+        XCTAssertEqual(components.year, 2024)
+        XCTAssertEqual(components.month, 1)
+        XCTAssertEqual(components.day, 29)
+    }
+    
+    func testPullRequestRepositoryName() {
+        let pr = createMockPR(id: 1)
+        
+        XCTAssertEqual(pr.repository, "octocat/Hello-World")
+    }
+}
+
+// MARK: - Keychain Helper Tests
+
+final class KeychainHelperTests: XCTestCase {
+    
+    func testKeychainSaveAndLoad() {
+        let key = "test_key_\(UUID().uuidString)"
+        let value = "test_value_123"
+        
+        KeychainHelper.save(key: key, value: value)
+        let loadedValue = KeychainHelper.load(key: key)
+        
+        XCTAssertEqual(loadedValue, value)
+        
+        KeychainHelper.delete(key: key)
+    }
+    
+    func testKeychainLoadNonExistent() {
+        let key = "non_existent_key_\(UUID().uuidString)"
+        let value = KeychainHelper.load(key: key)
+        
+        XCTAssertNil(value)
+    }
+    
+    func testKeychainDelete() {
+        let key = "test_delete_key_\(UUID().uuidString)"
+        let value = "test_value"
+        
+        KeychainHelper.save(key: key, value: value)
+        var loadedValue = KeychainHelper.load(key: key)
+        XCTAssertEqual(loadedValue, value)
+        
+        KeychainHelper.delete(key: key)
+        loadedValue = KeychainHelper.load(key: key)
+        XCTAssertNil(loadedValue)
+    }
+}
+
+// MARK: - PR Filtering Tests
+
+final class PRFilteringTests: XCTestCase {
+    
+    func testPRSorting() {
+        let pr1 = createMockPR(id: 1, updatedAt: "2024-01-29T10:00:00Z")
+        let pr2 = createMockPR(id: 2, updatedAt: "2024-01-29T15:00:00Z")
+        let pr3 = createMockPR(id: 3, updatedAt: "2024-01-29T12:00:00Z")
+        
+        let unsorted = [pr1, pr2, pr3]
+        let sorted = unsorted.sorted { $0.updatedDate > $1.updatedDate }
+        
+        XCTAssertEqual(sorted[0].id, 2)
+        XCTAssertEqual(sorted[1].id, 3)
+        XCTAssertEqual(sorted[2].id, 1)
+    }
+    
+    func testDraftPRIdentification() {
+        let draftPR = createMockPR(id: 1, draft: true)
+        let normalPR = createMockPR(id: 2, draft: false)
+        
+        XCTAssertTrue(draftPR.draft)
+        XCTAssertFalse(normalPR.draft)
+    }
+}
+
+// MARK: - Authentication Flow Tests
+
+final class AuthenticationFlowTests: XCTestCase {
+    
+    func testTokenAuthentication() {
+        let service = GitHubService()
+        
+        XCTAssertFalse(service.isAuthenticated)
+        
+        service.personalAccessToken = "test_token_123"
+        XCTAssertTrue(service.isAuthenticated)
+    }
+    
+    func testSignOutClearsAuth() {
+        let service = GitHubService()
+        
+        service.personalAccessToken = "test_token"
+        service.currentUser = GitHubUser(
+            login: "testuser",
+            id: 123,
+            avatarURL: "https://example.com/avatar.jpg",
+            name: "Test User"
+        )
+        
+        XCTAssertTrue(service.isAuthenticated)
+        
+        service.signOut()
+        
+        XCTAssertFalse(service.isAuthenticated)
+        XCTAssertNil(service.personalAccessToken)
+        XCTAssertNil(service.currentUser)
+    }
+}
+// MARK: - Test Helpers
+
+func createMockPR(
+    id: Int,
+    number: Int = 123,
+    title: String = "Test PR",
+    createdAt: String = "2024-01-29T10:00:00Z",
+    updatedAt: String = "2024-01-29T10:00:00Z",
+    draft: Bool = false,
+    additions: Int = 10,
+    deletions: Int = 5
+) -> PullRequest {
+    return PullRequest(
+        id: id,
+        number: number,
+        title: title,
+        body: "Test body",
+        htmlURL: "https://github.com/octocat/Hello-World/pull/\(number)",
+        state: "open",
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+        user: PRUser(login: "testuser", avatarURL: "https://example.com/avatar.jpg"),
+        draft: draft,
+        head: PRBranch(
+            ref: "feature-branch",
+            repo: PRRepository(name: "Hello-World", fullName: "octocat/Hello-World")
+        ),
+        base: PRBranch(
+            ref: "main",
+            repo: PRRepository(name: "Hello-World", fullName: "octocat/Hello-World")
+        ),
+        additions: additions,
+        deletions: deletions,
+        changedFiles: 3
+    )
+}
+
+

@@ -1,0 +1,580 @@
+//
+//  GitHubService.swift
+//  pulse
+//
+//  Created by Przemyslaw Lusar on 29/01/2026.
+//
+
+import Foundation
+import AppKit
+import UserNotifications
+
+enum NotificationAuthorizationStatus {
+    case authorized, denied, notDetermined, provisional, ephemeral
+}
+
+@Observable
+class GitHubService {
+    static let shared = GitHubService()
+
+    var isAuthenticated: Bool = false
+    var isCheckingAuth: Bool = true  // True until initial token validation completes
+    var personalAccessToken: String? {
+        didSet {
+            if personalAccessToken != nil {
+                saveToken()
+            }
+        }
+    }
+    var currentUser: GitHubUser?
+    var awaitingReviewPRs: [PullRequest] = []
+    var involvedPRs: [PullRequest] = []
+    var isLoadingAwaiting: Bool = false
+    var isLoadingInvolved: Bool = false
+    var hasLoadedAwaiting: Bool = false
+    var hasLoadedInvolved: Bool = false
+    var errorMessage: String?
+
+    var isLoading: Bool { isLoadingAwaiting || isLoadingInvolved }
+    var hasLoadedOnce: Bool { hasLoadedAwaiting || hasLoadedInvolved }
+    
+    // Repository filtering
+    var monitoredRepositories: [String] = [] {
+        didSet { UserDefaults.standard.set(monitoredRepositories, forKey: "monitoredRepositories") }
+    }
+    var monitorAllRepositories: Bool = true {
+        didSet { UserDefaults.standard.set(monitorAllRepositories, forKey: "monitorAllRepositories") }
+    }
+
+    // Polling
+    var isPollingEnabled: Bool = true {
+        didSet {
+            UserDefaults.standard.set(isPollingEnabled, forKey: "isPollingEnabled")
+            if isPollingEnabled {
+                startPolling()
+            } else {
+                pollingTask?.cancel()
+            }
+        }
+    }
+    var pollingInterval: TimeInterval = 300 { // 5 minutes
+        didSet { UserDefaults.standard.set(pollingInterval, forKey: "pollingInterval") }
+    }
+    private var pollingTask: Task<Void, Never>?
+    
+    // Notification tracking
+    private var previousPRIds: Set<Int> = []
+    
+    var notificationStatus: NotificationAuthorizationStatus = .notDetermined
+    
+    private let tokenKey = "github_token"
+    
+    init() {
+        // Load saved settings
+        loadSettings()
+
+        requestNotificationPermission()
+        checkNotificationPermissionStatus()
+        loadToken()
+    }
+
+    private func loadSettings() {
+        let defaults = UserDefaults.standard
+
+        if defaults.object(forKey: "pollingInterval") != nil {
+            pollingInterval = defaults.double(forKey: "pollingInterval")
+        }
+        if defaults.object(forKey: "isPollingEnabled") != nil {
+            isPollingEnabled = defaults.bool(forKey: "isPollingEnabled")
+        }
+        if defaults.object(forKey: "monitorAllRepositories") != nil {
+            monitorAllRepositories = defaults.bool(forKey: "monitorAllRepositories")
+        }
+        if let repos = defaults.stringArray(forKey: "monitoredRepositories") {
+            monitoredRepositories = repos
+        }
+    }
+
+    func resetLoadedState() {
+        hasLoadedAwaiting = false
+        hasLoadedInvolved = false
+    }
+    
+    deinit {
+        pollingTask?.cancel()
+    }
+    
+    // MARK: - Notifications
+    
+    func sendNotification(for newPRs: [PullRequest]) {
+        guard !newPRs.isEmpty else { return }
+
+        // Show full-screen notification
+        DispatchQueue.main.async {
+            PRNotificationWindowController.shared.show(for: newPRs)
+        }
+
+        // Also send system notification
+        let center = UNUserNotificationCenter.current()
+
+        for pr in newPRs {
+            let content = UNMutableNotificationContent()
+            content.title = "New PR Review Request"
+            content.subtitle = pr.repository
+            content.body = pr.title
+            content.sound = .default
+            content.userInfo = ["prURL": pr.htmlURL]
+
+            let request = UNNotificationRequest(
+                identifier: "pr-\(pr.id)",
+                content: content,
+                trigger: nil
+            )
+
+            center.add(request) { error in
+                if let error = error {
+                    print("❌ Failed to send notification: \(error)")
+                } else {
+                    print("✅ Notification sent for PR #\(pr.number)")
+                }
+            }
+        }
+    }
+    
+    private func requestNotificationPermission() {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if granted {
+                print("✅ Notification permission granted")
+            } else if let error = error {
+                print("❌ Notification permission error: \(error)")
+            }
+        }
+    }
+    
+    func checkNotificationPermissionStatus() {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                switch settings.authorizationStatus {
+                case .authorized:
+                    self.notificationStatus = .authorized
+                case .denied:
+                    self.notificationStatus = .denied
+                case .notDetermined:
+                    self.notificationStatus = .notDetermined
+                case .provisional:
+                    self.notificationStatus = .provisional
+                case .ephemeral:
+                    self.notificationStatus = .ephemeral
+                @unknown default:
+                    self.notificationStatus = .notDetermined
+                }
+            }
+        }
+    }
+    
+    // MARK: - Authentication
+    
+    func authenticate(token: String) async {
+        self.personalAccessToken = token
+        await fetchCurrentUser()
+        // Start polling after successful authentication
+        startPolling()
+    }
+    
+    func signOut() {
+        isAuthenticated = false
+        personalAccessToken = nil
+        currentUser = nil
+        awaitingReviewPRs = []
+        involvedPRs = []
+        hasLoadedAwaiting = false
+        hasLoadedInvolved = false
+        previousPRIds = []
+        pollingTask?.cancel()
+        KeychainHelper.delete(key: tokenKey)
+    }
+    
+    private func saveToken() {
+        guard let token = personalAccessToken else { return }
+        KeychainHelper.save(key: tokenKey, value: token)
+    }
+    
+    private func loadToken() {
+        if let token = KeychainHelper.load(key: tokenKey) {
+            personalAccessToken = token
+            // isAuthenticated will be set after fetchCurrentUser succeeds
+            Task {
+                await fetchCurrentUser()
+                isCheckingAuth = false
+                // Start polling after loading token and fetching user
+                startPolling()
+            }
+        } else {
+            // No stored token, done checking
+            isCheckingAuth = false
+        }
+    }
+    
+    // MARK: - Polling
+    
+    /// Starts polling for new PRs at the configured interval.
+    private func startPolling() {
+        pollingTask?.cancel()
+        guard isPollingEnabled else { return }
+
+        pollingTask = Task {
+            while !Task.isCancelled {
+                await fetchAllPRs()
+                try? await Task.sleep(nanoseconds: UInt64(pollingInterval * 1_000_000_000))
+            }
+        }
+    }
+    
+    // MARK: - API Calls
+    
+    func fetchCurrentUser() async {
+        guard let token = personalAccessToken else { return }
+
+        let url = URL(string: "https://api.github.com/user")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            currentUser = try JSONDecoder().decode(GitHubUser.self, from: data)
+            isAuthenticated = true
+            await fetchAllPRs()
+        } catch {
+            errorMessage = "Failed to authenticate: \(error.localizedDescription)"
+            isAuthenticated = false
+            personalAccessToken = nil
+            KeychainHelper.delete(key: tokenKey)
+        }
+    }
+    
+    func fetchPendingPRs() async {
+        guard personalAccessToken != nil, let username = currentUser?.login else { return }
+
+        isLoadingAwaiting = true
+        errorMessage = nil
+
+        print("👤 Fetching PRs for user: \(username)")
+
+        var allPRs: [PullRequest] = []
+
+        if monitorAllRepositories {
+            let query = "type:pr state:open review-requested:\(username)"
+            print("🔍 Using query: \(query)")
+            allPRs = await searchPRs(query: query, username: username)
+        } else if !monitoredRepositories.isEmpty {
+            for repo in monitoredRepositories {
+                let query = "type:pr state:open repo:\(repo) review-requested:\(username)"
+                let prs = await searchPRs(query: query, username: username)
+                allPRs.append(contentsOf: prs)
+            }
+        } else {
+            print("⚠️ No repositories configured for monitoring")
+            isLoadingAwaiting = false
+            return
+        }
+
+        print("🎉 Final result: \(allPRs.count) PRs need your review")
+
+        let sortedPRs = allPRs.sorted { $0.updatedDate > $1.updatedDate }
+
+        // Determine new PRs by comparing IDs with previousPRIds
+        let currentPRIds = Set(sortedPRs.map { $0.id })
+        let newPRs = sortedPRs.filter { !previousPRIds.contains($0.id) }
+
+        // Send notifications for new PRs (only after first load)
+        if hasLoadedAwaiting && !newPRs.isEmpty {
+            sendNotification(for: newPRs)
+        }
+
+        previousPRIds = currentPRIds
+        awaitingReviewPRs = sortedPRs
+        hasLoadedAwaiting = true
+        isLoadingAwaiting = false
+    }
+
+    func fetchAllPRs() async {
+        // Fetch both in parallel
+        async let awaitingTask: () = fetchPendingPRs()
+        async let involvedTask: () = fetchInvolvedPRs()
+        _ = await (awaitingTask, involvedTask)
+    }
+    
+    func fetchInvolvedPRs() async {
+        guard personalAccessToken != nil, let username = currentUser?.login else { return }
+
+        isLoadingInvolved = true
+
+        let query = "type:pr state:open involves:\(username)"
+        let prs = await searchPRs(query: query, username: username)
+        let sortedPRs = prs.sorted { $0.updatedDate > $1.updatedDate }
+
+        involvedPRs = sortedPRs
+        hasLoadedInvolved = true
+        isLoadingInvolved = false
+    }
+    
+    private func searchPRs(query: String, username: String) async -> [PullRequest] {
+        guard let token = personalAccessToken else { return [] }
+        
+        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let urlString = "https://api.github.com/search/issues?q=\(encodedQuery)&sort=updated&order=desc&per_page=100"
+        
+        print("📡 URL: \(urlString)")
+        
+        guard let url = URL(string: urlString) else { return [] }
+        
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                print("📊 HTTP Status: \(httpResponse.statusCode)")
+            }
+            
+            let searchResponse = try JSONDecoder().decode(GitHubSearchResponse.self, from: data)
+            print("✅ Found: \(searchResponse.totalCount) total PRs")
+            
+            // Fetch full details for each PR
+            var detailedPRs: [PullRequest] = []
+            for item in searchResponse.items {
+                if let prDetails = await fetchPRDetails(owner: item.repositoryOwner, repo: item.repositoryName, number: item.number) {
+                    // Skip PRs authored by the user
+                    if prDetails.user.login != username {
+                        detailedPRs.append(prDetails)
+                    }
+                }
+            }
+            
+            print("📦 Returning \(detailedPRs.count) PRs needing review")
+            return detailedPRs
+            
+        } catch {
+            print("❌ Error: \(error)")
+            return []
+        }
+    }
+    
+    private func fetchPRDetails(owner: String, repo: String, number: Int) async -> PullRequest? {
+        guard let token = personalAccessToken else { return nil }
+        
+        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/pulls/\(number)")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                print("📥 PR #\(number) status: \(httpResponse.statusCode)")
+                
+                if httpResponse.statusCode != 200 {
+                    if let errorString = String(data: data, encoding: .utf8) {
+                        print("❌ Error response: \(errorString)")
+                    }
+                    return nil
+                }
+            }
+            
+            return try JSONDecoder().decode(PullRequest.self, from: data)
+        } catch {
+            print("❌ Error fetching PR details for #\(number): \(error)")
+            return nil
+        }
+    }
+    
+    func openPRInBrowser(_ pr: PullRequest) {
+        if let url = URL(string: pr.htmlURL) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+// MARK: - Models
+
+struct GitHubUser: Codable {
+    let login: String
+    let id: Int
+    let avatarURL: String
+    let name: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case login, id, name
+        case avatarURL = "avatar_url"
+    }
+}
+
+struct GitHubOrganization: Codable {
+    let login: String
+    let id: Int
+    let avatarURL: String?
+    let description: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case login, id, description
+        case avatarURL = "avatar_url"
+    }
+}
+
+struct GitHubSearchResponse: Codable {
+    let totalCount: Int
+    let items: [GitHubIssue]
+    
+    enum CodingKeys: String, CodingKey {
+        case totalCount = "total_count"
+        case items
+    }
+}
+
+struct GitHubIssue: Codable {
+    let number: Int
+    let title: String
+    let repositoryURL: String
+    
+    var repositoryOwner: String {
+        let components = repositoryURL.split(separator: "/")
+        return components.count >= 2 ? String(components[components.count - 2]) : ""
+    }
+    
+    var repositoryName: String {
+        let components = repositoryURL.split(separator: "/")
+        return components.count >= 1 ? String(components[components.count - 1]) : ""
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case number, title
+        case repositoryURL = "repository_url"
+    }
+}
+
+struct PullRequest: Codable, Identifiable {
+    let id: Int
+    let number: Int
+    let title: String
+    let body: String?
+    let htmlURL: String
+    let state: String
+    let createdAt: String
+    let updatedAt: String
+    let user: PRUser
+    let draft: Bool
+    let head: PRBranch
+    let base: PRBranch
+    let additions: Int?
+    let deletions: Int?
+    let changedFiles: Int?
+    
+    var repository: String {
+        base.repo.fullName
+    }
+    
+    var createdDate: Date {
+        ISO8601DateFormatter().date(from: createdAt) ?? Date()
+    }
+    
+    var updatedDate: Date {
+        ISO8601DateFormatter().date(from: updatedAt) ?? Date()
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id, number, title, body, state, user, draft, head, base, additions, deletions
+        case htmlURL = "html_url"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case changedFiles = "changed_files"
+    }
+}
+
+struct PRUser: Codable {
+    let login: String
+    let avatarURL: String
+    
+    enum CodingKeys: String, CodingKey {
+        case login
+        case avatarURL = "avatar_url"
+    }
+}
+
+struct PRBranch: Codable {
+    let ref: String
+    let repo: PRRepository
+}
+
+struct PRRepository: Codable {
+    let name: String
+    let fullName: String
+    
+    enum CodingKeys: String, CodingKey {
+        case name
+        case fullName = "full_name"
+    }
+}
+
+struct PRReview: Codable {
+    let id: Int
+    let user: PRUser
+    let state: String
+    let submittedAt: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, user, state
+        case submittedAt = "submitted_at"
+    }
+}
+
+// MARK: - Keychain Helper
+
+class KeychainHelper {
+    static func save(key: String, value: String) {
+        let data = value.data(using: .utf8)!
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data
+        ]
+        
+        SecItemDelete(query as CFDictionary)
+        SecItemAdd(query as CFDictionary, nil)
+    }
+    
+    static func load(key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let string = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        
+        return string
+    }
+    
+    static func delete(key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key
+        ]
+        
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
