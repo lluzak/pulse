@@ -39,12 +39,14 @@ class GitHubService {
     var hasLoadedOnce: Bool { hasLoadedAwaiting || hasLoadedInvolved }
     
     // Repository filtering
-    var monitoredRepositories: [String] = [] {
-        didSet { UserDefaults.standard.set(monitoredRepositories, forKey: "monitoredRepositories") }
+    var monitoredRepositories: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(monitoredRepositories), forKey: "monitoredRepositories") }
     }
     var monitorAllRepositories: Bool = true {
         didSet { UserDefaults.standard.set(monitorAllRepositories, forKey: "monitorAllRepositories") }
     }
+    var availableRepositories: [GitHubRepository] = []
+    var isLoadingRepositories: Bool = false
 
     // Polling
     var isPollingEnabled: Bool = true {
@@ -91,7 +93,7 @@ class GitHubService {
             monitorAllRepositories = defaults.bool(forKey: "monitorAllRepositories")
         }
         if let repos = defaults.stringArray(forKey: "monitoredRepositories") {
-            monitoredRepositories = repos
+            monitoredRepositories = Set(repos)
         }
     }
 
@@ -310,7 +312,55 @@ class GitHubService {
         hasLoadedInvolved = true
         isLoadingInvolved = false
     }
-    
+
+    func fetchRepositories() async {
+        guard let token = personalAccessToken else { return }
+
+        isLoadingRepositories = true
+
+        var allRepos: [GitHubRepository] = []
+        var page = 1
+        let perPage = 100
+
+        // Fetch all repositories the user has access to
+        while true {
+            let urlString = "https://api.github.com/user/repos?per_page=\(perPage)&page=\(page)&sort=pushed"
+            guard let url = URL(string: urlString) else { break }
+
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+            do {
+                let (data, _) = try await URLSession.shared.data(for: request)
+                let repos = try JSONDecoder().decode([GitHubRepository].self, from: data)
+
+                if repos.isEmpty {
+                    break
+                }
+
+                allRepos.append(contentsOf: repos)
+                page += 1
+
+                // Safety limit
+                if page > 10 { break }
+            } catch {
+                break
+            }
+        }
+
+        availableRepositories = allRepos.sorted { $0.fullName.lowercased() < $1.fullName.lowercased() }
+        isLoadingRepositories = false
+    }
+
+    func toggleRepository(_ repo: String) {
+        if monitoredRepositories.contains(repo) {
+            monitoredRepositories.remove(repo)
+        } else {
+            monitoredRepositories.insert(repo)
+        }
+    }
+
     private func searchPRs(query: String, username: String) async -> [PullRequest] {
         guard let token = personalAccessToken else { return [] }
         
@@ -393,9 +443,33 @@ struct GitHubOrganization: Codable {
     let id: Int
     let avatarURL: String?
     let description: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case login, id, description
+        case avatarURL = "avatar_url"
+    }
+}
+
+struct GitHubRepository: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let fullName: String
+    let isPrivate: Bool
+    let owner: GitHubRepoOwner
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, owner
+        case fullName = "full_name"
+        case isPrivate = "private"
+    }
+}
+
+struct GitHubRepoOwner: Codable {
+    let login: String
+    let avatarURL: String
+
+    enum CodingKeys: String, CodingKey {
+        case login
         case avatarURL = "avatar_url"
     }
 }

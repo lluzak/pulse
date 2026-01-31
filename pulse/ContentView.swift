@@ -367,7 +367,7 @@ struct AccountWindowTabView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if let user = gitHubService.currentUser {
-                    // User profile card
+                    // User profile card with sign out button
                     HStack(spacing: 12) {
                         AsyncImage(url: URL(string: user.avatarURL)) { image in
                             image.resizable().scaledToFill()
@@ -386,30 +386,20 @@ struct AccountWindowTabView: View {
                         }
 
                         Spacer()
-                    }
-                    .padding()
-                    .background(Color.primary.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-
-                    Divider()
-
-                    // Sign out
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Session")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
 
                         Button(action: {
                             gitHubService.signOut()
                             onClose()
                         }) {
-                            HStack {
-                                Image(systemName: "rectangle.portrait.and.arrow.right")
-                                Text("Sign Out")
-                            }
+                            Text("Sign Out")
+                                .font(.subheadline)
                         }
+                        .buttonStyle(.bordered)
                         .foregroundStyle(.red)
                     }
+                    .padding()
+                    .background(Color.primary.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }
             .padding()
@@ -463,33 +453,158 @@ struct SettingsTabButton: View {
 
 struct RepositoriesTabView: View {
     @Bindable var gitHubService: GitHubService
+    @State private var searchText: String = ""
+
+    var filteredRepositories: [GitHubRepository] {
+        if searchText.isEmpty {
+            return gitHubService.availableRepositories
+        }
+        return gitHubService.availableRepositories.filter {
+            $0.fullName.localizedCaseInsensitiveContains(searchText)
+        }
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Monitoring")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    Toggle("Monitor all accessible repositories", isOn: $gitHubService.monitorAllRepositories)
-
-                    if !gitHubService.monitorAllRepositories {
-                        Text("Specific repository filtering coming soon...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 4)
-                    }
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            // Toggle for all repos
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Monitor all accessible repositories", isOn: $gitHubService.monitorAllRepositories)
+                    .padding(.horizontal)
+                    .padding(.top)
 
                 if gitHubService.monitorAllRepositories {
                     Text("Pulse will check for PRs across all repositories you have access to.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal)
                 }
             }
-            .padding()
+
+            if !gitHubService.monitorAllRepositories {
+                Divider()
+                    .padding(.top, 12)
+
+                // Search field
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search repositories...", text: $searchText)
+                        .textFieldStyle(.plain)
+                }
+                .padding(8)
+                .background(Color.primary.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal)
+                .padding(.top, 12)
+
+                // Repository list
+                if gitHubService.isLoadingRepositories {
+                    VStack {
+                        ProgressView()
+                        Text("Loading repositories...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if gitHubService.availableRepositories.isEmpty {
+                    VStack(spacing: 8) {
+                        Text("No repositories found")
+                            .font(.subheadline)
+                        Button("Load Repositories") {
+                            Task { await gitHubService.fetchRepositories() }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(filteredRepositories) { repo in
+                                RepositoryRow(
+                                    repo: repo,
+                                    isSelected: gitHubService.monitoredRepositories.contains(repo.fullName),
+                                    onToggle: { gitHubService.toggleRepository(repo.fullName) }
+                                )
+                                Divider()
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+
+                // Selected count
+                if !gitHubService.monitoredRepositories.isEmpty {
+                    HStack {
+                        Text("\(gitHubService.monitoredRepositories.count) selected")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Clear All") {
+                            gitHubService.monitoredRepositories.removeAll()
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                }
+            }
         }
+        .onAppear {
+            if !gitHubService.monitorAllRepositories && gitHubService.availableRepositories.isEmpty {
+                Task { await gitHubService.fetchRepositories() }
+            }
+        }
+        .onChange(of: gitHubService.monitorAllRepositories) { _, newValue in
+            if !newValue && gitHubService.availableRepositories.isEmpty {
+                Task { await gitHubService.fetchRepositories() }
+            }
+        }
+    }
+}
+
+struct RepositoryRow: View {
+    let repo: GitHubRepository
+    let isSelected: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 12) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? .blue : .secondary)
+                    .font(.system(size: 18))
+
+                AsyncImage(url: URL(string: repo.owner.avatarURL)) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color.gray
+                }
+                .frame(width: 24, height: 24)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(repo.fullName)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+
+                    HStack(spacing: 4) {
+                        Image(systemName: repo.isPrivate ? "lock.fill" : "globe")
+                            .font(.caption2)
+                        Text(repo.isPrivate ? "Private" : "Public")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
