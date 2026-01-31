@@ -253,8 +253,8 @@ class SettingsWindowController: NSObject, NSWindowDelegate {
         })
 
         // Calculate window position (center of screen)
-        let windowWidth: CGFloat = 600
-        let windowHeight: CGFloat = 480
+        let windowWidth: CGFloat = 700
+        let windowHeight: CGFloat = 500
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let screenFrame = screen.visibleFrame
         let windowX = screenFrame.midX - windowWidth / 2
