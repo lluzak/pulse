@@ -268,10 +268,15 @@ class SettingsWindowController: NSObject, NSWindowDelegate {
             defer: false
         )
 
-        window.contentViewController = NSHostingController(rootView: settingsView)
+        let hostingController = NSHostingController(rootView: settingsView)
+        hostingController.view.frame = NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight)
+
+        window.contentViewController = hostingController
         window.title = "Pulse Settings"
         window.delegate = self
         window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: windowWidth, height: windowHeight))
+        window.minSize = NSSize(width: windowWidth, height: windowHeight)
         window.center()
 
         window.makeKeyAndOrderFront(nil)
