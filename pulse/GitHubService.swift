@@ -133,9 +133,7 @@ class GitHubService {
 
             center.add(request) { error in
                 if let error = error {
-                    print("❌ Failed to send notification: \(error)")
-                } else {
-                    print("✅ Notification sent for PR #\(pr.number)")
+                    print("[Pulse] Notification error: \(error.localizedDescription)")
                 }
             }
         }
@@ -143,11 +141,9 @@ class GitHubService {
     
     private func requestNotificationPermission() {
         let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if granted {
-                print("✅ Notification permission granted")
-            } else if let error = error {
-                print("❌ Notification permission error: \(error)")
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, error in
+            if let error = error {
+                print("[Pulse] Notification permission error: \(error.localizedDescription)")
             }
         }
     }
@@ -261,13 +257,10 @@ class GitHubService {
         isLoadingAwaiting = true
         errorMessage = nil
 
-        print("👤 Fetching PRs for user: \(username)")
-
         var allPRs: [PullRequest] = []
 
         if monitorAllRepositories {
             let query = "type:pr state:open review-requested:\(username)"
-            print("🔍 Using query: \(query)")
             allPRs = await searchPRs(query: query, username: username)
         } else if !monitoredRepositories.isEmpty {
             for repo in monitoredRepositories {
@@ -276,12 +269,9 @@ class GitHubService {
                 allPRs.append(contentsOf: prs)
             }
         } else {
-            print("⚠️ No repositories configured for monitoring")
             isLoadingAwaiting = false
             return
         }
-
-        print("🎉 Final result: \(allPRs.count) PRs need your review")
 
         let sortedPRs = allPRs.sorted { $0.updatedDate > $1.updatedDate }
 
@@ -326,25 +316,17 @@ class GitHubService {
         
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         let urlString = "https://api.github.com/search/issues?q=\(encodedQuery)&sort=updated&order=desc&per_page=100"
-        
-        print("📡 URL: \(urlString)")
-        
+
         guard let url = URL(string: urlString) else { return [] }
-        
+
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        
+
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            
-            if let httpResponse = response as? HTTPURLResponse {
-                print("📊 HTTP Status: \(httpResponse.statusCode)")
-            }
-            
+            let (data, _) = try await URLSession.shared.data(for: request)
             let searchResponse = try JSONDecoder().decode(GitHubSearchResponse.self, from: data)
-            print("✅ Found: \(searchResponse.totalCount) total PRs")
-            
+
             // Fetch full details for each PR
             var detailedPRs: [PullRequest] = []
             for item in searchResponse.items {
@@ -355,12 +337,11 @@ class GitHubService {
                     }
                 }
             }
-            
-            print("📦 Returning \(detailedPRs.count) PRs needing review")
+
             return detailedPRs
-            
+
         } catch {
-            print("❌ Error: \(error)")
+            print("[Pulse] Search error: \(error.localizedDescription)")
             return []
         }
     }
@@ -375,21 +356,13 @@ class GitHubService {
         
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            
-            if let httpResponse = response as? HTTPURLResponse {
-                print("📥 PR #\(number) status: \(httpResponse.statusCode)")
-                
-                if httpResponse.statusCode != 200 {
-                    if let errorString = String(data: data, encoding: .utf8) {
-                        print("❌ Error response: \(errorString)")
-                    }
-                    return nil
-                }
+
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+                return nil
             }
-            
+
             return try JSONDecoder().decode(PullRequest.self, from: data)
         } catch {
-            print("❌ Error fetching PR details for #\(number): \(error)")
             return nil
         }
     }
