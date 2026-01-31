@@ -284,9 +284,16 @@ struct PRListView: View {
 
 struct SettingsWindowView: View {
     var gitHubService = GitHubService.shared
+    let initialTab: SettingsTab
     let onClose: () -> Void
     @State private var selectedTab: SettingsTab = .account
     @State private var pollingMinutes: Double = 5
+
+    init(initialTab: SettingsTab = .account, onClose: @escaping () -> Void) {
+        self.initialTab = initialTab
+        self.onClose = onClose
+        _selectedTab = State(initialValue: initialTab)
+    }
 
     var body: some View {
         VStack(spacing: 0) {

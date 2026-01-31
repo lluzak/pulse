@@ -54,6 +54,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Create the context menu for right-click
         contextMenu = NSMenu()
+        contextMenu?.addItem(NSMenuItem(title: "About Pulse", action: #selector(openAbout), keyEquivalent: ""))
+        contextMenu?.addItem(NSMenuItem.separator())
         contextMenu?.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
         contextMenu?.addItem(NSMenuItem.separator())
         contextMenu?.addItem(NSMenuItem(title: "Quit Pulse", action: #selector(quitApp), keyEquivalent: "q"))
@@ -116,6 +118,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Close the popover and show settings in independent window
         closePopover()
         SettingsWindowController.shared.show()
+    }
+
+    @objc func openAbout() {
+        // Close the popover and show settings on About tab
+        closePopover()
+        SettingsWindowController.shared.show(tab: .about)
     }
 
     @objc func quitApp() {
@@ -228,7 +236,7 @@ class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
 
-    func show() {
+    func show(tab: SettingsTab = .account) {
         // If window already exists and is visible, bring it to front
         if let existingWindow = window, existingWindow.isVisible {
             existingWindow.makeKeyAndOrderFront(nil)
@@ -239,13 +247,13 @@ class SettingsWindowController: NSObject, NSWindowDelegate {
         // Close existing window if any
         window?.close()
 
-        // Create settings view
-        let settingsView = SettingsWindowView(onClose: { [weak self] in
+        // Create settings view with initial tab
+        let settingsView = SettingsWindowView(initialTab: tab, onClose: { [weak self] in
             self?.dismiss()
         })
 
         // Calculate window position (center of screen)
-        let windowWidth: CGFloat = 380
+        let windowWidth: CGFloat = 420
         let windowHeight: CGFloat = 480
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let screenFrame = screen.visibleFrame
