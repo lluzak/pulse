@@ -304,9 +304,23 @@ class GitHubService {
 
         isLoadingInvolved = true
 
-        let query = "type:pr state:open involves:\(username)"
-        let prs = await searchPRs(query: query, username: username)
-        let sortedPRs = prs.sorted { $0.updatedDate > $1.updatedDate }
+        var allPRs: [PullRequest] = []
+
+        if monitorAllRepositories {
+            let query = "type:pr state:open involves:\(username)"
+            allPRs = await searchPRs(query: query, username: username)
+        } else if !monitoredRepositories.isEmpty {
+            for repo in monitoredRepositories {
+                let query = "type:pr state:open repo:\(repo) involves:\(username)"
+                let prs = await searchPRs(query: query, username: username)
+                allPRs.append(contentsOf: prs)
+            }
+        } else {
+            isLoadingInvolved = false
+            return
+        }
+
+        let sortedPRs = allPRs.sorted { $0.updatedDate > $1.updatedDate }
 
         involvedPRs = sortedPRs
         hasLoadedInvolved = true
