@@ -475,12 +475,12 @@ class GitHubService {
     
     private func fetchPRDetails(owner: String, repo: String, number: Int) async -> PullRequest? {
         guard let token = personalAccessToken else { return nil }
-        
+
         let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/pulls/\(number)")!
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        
+
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -493,7 +493,51 @@ class GitHubService {
             return nil
         }
     }
-    
+
+    func hasUserReviewedPR(owner: String, repo: String, number: Int) async -> Bool {
+        guard let token = personalAccessToken, let username = currentUser?.login else { return false }
+
+        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/pulls/\(number)/reviews")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+                return false
+            }
+
+            let reviews = try JSONDecoder().decode([PRReviewResponse].self, from: data)
+
+            // Check if user has submitted a review (not PENDING)
+            let validStates = ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]
+            return reviews.contains { review in
+                review.user.login == username && validStates.contains(review.state)
+            }
+        } catch {
+            print("[Pulse] Error checking review status: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    func checkWatchedPRStatus(pr: WatchedPR) async -> WatchedPRStatus {
+        // First check if PR is still open
+        if let prDetails = await fetchPRDetails(owner: pr.owner, repo: pr.repo, number: pr.prNumber) {
+            if prDetails.state != "open" {
+                return .closed
+            }
+        } else {
+            // Can't fetch PR, assume closed/deleted
+            return .closed
+        }
+
+        // Check if user has reviewed
+        let hasReviewed = await hasUserReviewedPR(owner: pr.owner, repo: pr.repo, number: pr.prNumber)
+        return hasReviewed ? .reviewed : .needsReminder
+    }
+
     func openPRInBrowser(_ pr: PullRequest) {
         if let url = URL(string: pr.htmlURL) {
             NSWorkspace.shared.open(url)
@@ -646,6 +690,18 @@ struct PRRepository: Codable {
 }
 
 struct PRReview: Codable {
+    let id: Int
+    let user: PRUser
+    let state: String
+    let submittedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, user, state
+        case submittedAt = "submitted_at"
+    }
+}
+
+struct PRReviewResponse: Codable {
     let id: Int
     let user: PRUser
     let state: String

@@ -372,6 +372,29 @@ final class WatchedPRTests: XCTestCase {
 
         XCTAssertEqual(service.watchedPRs.count, 1)
     }
+
+    func testPRReviewResponseDecoding() throws {
+        let json = """
+        [
+            {
+                "id": 80,
+                "user": {
+                    "login": "octocat",
+                    "avatar_url": "https://github.com/images/avatar.jpg"
+                },
+                "state": "APPROVED",
+                "submitted_at": "2024-01-29T12:00:00Z"
+            }
+        ]
+        """
+
+        let data = json.data(using: .utf8)!
+        let reviews = try JSONDecoder().decode([PRReviewResponse].self, from: data)
+
+        XCTAssertEqual(reviews.count, 1)
+        XCTAssertEqual(reviews[0].user.login, "octocat")
+        XCTAssertEqual(reviews[0].state, "APPROVED")
+    }
 }
 
 // MARK: - Test Helpers
