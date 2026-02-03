@@ -406,6 +406,38 @@ class GitHubService {
         }
     }
 
+    func startWatching(pr: PullRequest) {
+        // Don't add duplicates
+        guard !isWatching(prId: pr.id) else { return }
+
+        let watched = WatchedPR(
+            id: pr.id,
+            prNumber: pr.number,
+            owner: pr.base.repo.fullName.components(separatedBy: "/").first ?? "",
+            repo: pr.base.repo.name,
+            repository: pr.repository,
+            title: pr.title,
+            htmlURL: pr.htmlURL,
+            authorLogin: pr.user.login,
+            authorAvatarURL: pr.user.avatarURL,
+            startedWatchingAt: Date(),
+            lastReminderAt: nil
+        )
+        watchedPRs.append(watched)
+    }
+
+    func stopWatching(prId: Int) {
+        watchedPRs.removeAll { $0.id == prId }
+    }
+
+    func isWatching(prId: Int) -> Bool {
+        watchedPRs.contains { $0.id == prId }
+    }
+
+    func clearAllWatchedPRs() {
+        watchedPRs.removeAll()
+    }
+
     private func searchPRs(query: String, username: String) async -> [PullRequest] {
         guard let token = personalAccessToken else { return [] }
         

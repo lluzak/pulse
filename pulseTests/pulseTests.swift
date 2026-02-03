@@ -305,6 +305,73 @@ final class WatchedPRTests: XCTestCase {
         XCTAssertEqual(decoded.authorLogin, "contributor")
         XCTAssertNil(decoded.lastReminderAt)
     }
+
+    func testStartWatching() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "watchedPRs")
+
+        let service = GitHubService()
+        let pr = createMockPR(id: 100, number: 42)
+
+        service.startWatching(pr: pr)
+
+        XCTAssertEqual(service.watchedPRs.count, 1)
+        XCTAssertEqual(service.watchedPRs.first?.id, 100)
+        XCTAssertEqual(service.watchedPRs.first?.prNumber, 42)
+    }
+
+    func testStopWatching() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "watchedPRs")
+
+        let service = GitHubService()
+        let pr = createMockPR(id: 100)
+
+        service.startWatching(pr: pr)
+        XCTAssertEqual(service.watchedPRs.count, 1)
+
+        service.stopWatching(prId: 100)
+        XCTAssertTrue(service.watchedPRs.isEmpty)
+    }
+
+    func testIsWatching() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "watchedPRs")
+
+        let service = GitHubService()
+        let pr = createMockPR(id: 100)
+
+        XCTAssertFalse(service.isWatching(prId: 100))
+
+        service.startWatching(pr: pr)
+        XCTAssertTrue(service.isWatching(prId: 100))
+    }
+
+    func testClearAllWatchedPRs() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "watchedPRs")
+
+        let service = GitHubService()
+        service.startWatching(pr: createMockPR(id: 1))
+        service.startWatching(pr: createMockPR(id: 2))
+        XCTAssertEqual(service.watchedPRs.count, 2)
+
+        service.clearAllWatchedPRs()
+        XCTAssertTrue(service.watchedPRs.isEmpty)
+    }
+
+    func testStartWatchingDoesNotDuplicate() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "watchedPRs")
+
+        let service = GitHubService()
+        let pr = createMockPR(id: 100)
+
+        service.startWatching(pr: pr)
+        service.startWatching(pr: pr)
+
+        XCTAssertEqual(service.watchedPRs.count, 1)
+    }
 }
 
 // MARK: - Test Helpers
