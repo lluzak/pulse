@@ -262,6 +262,20 @@ final class AuthenticationFlowTests: XCTestCase {
 
 final class WatchedPRTests: XCTestCase {
 
+    func testWatchedPRsStorageDefaults() {
+        // Clear UserDefaults
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "watchedPRs")
+        defaults.removeObject(forKey: "isReminderEnabled")
+        defaults.removeObject(forKey: "reminderInterval")
+
+        let service = GitHubService()
+
+        XCTAssertTrue(service.watchedPRs.isEmpty)
+        XCTAssertTrue(service.isReminderEnabled)
+        XCTAssertEqual(service.reminderInterval, 600) // 10 minutes
+    }
+
     func testWatchedPREncoding() throws {
         let watchedPR = WatchedPR(
             id: 12345,

@@ -48,6 +48,17 @@ class GitHubService {
     var availableRepositories: [GitHubRepository] = []
     var isLoadingRepositories: Bool = false
 
+    // Review reminders
+    var watchedPRs: [WatchedPR] = [] {
+        didSet { saveWatchedPRs() }
+    }
+    var isReminderEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(isReminderEnabled, forKey: "isReminderEnabled") }
+    }
+    var reminderInterval: TimeInterval = 600 { // 10 minutes
+        didSet { UserDefaults.standard.set(reminderInterval, forKey: "reminderInterval") }
+    }
+
     // Polling
     var isPollingEnabled: Bool = true {
         didSet {
@@ -95,6 +106,13 @@ class GitHubService {
         if let repos = defaults.stringArray(forKey: "monitoredRepositories") {
             monitoredRepositories = Set(repos)
         }
+        if defaults.object(forKey: "isReminderEnabled") != nil {
+            isReminderEnabled = defaults.bool(forKey: "isReminderEnabled")
+        }
+        if defaults.object(forKey: "reminderInterval") != nil {
+            reminderInterval = defaults.double(forKey: "reminderInterval")
+        }
+        loadWatchedPRs()
     }
 
     func resetLoadedState() {
@@ -372,6 +390,19 @@ class GitHubService {
             monitoredRepositories.remove(repo)
         } else {
             monitoredRepositories.insert(repo)
+        }
+    }
+
+    private func saveWatchedPRs() {
+        if let data = try? JSONEncoder().encode(watchedPRs) {
+            UserDefaults.standard.set(data, forKey: "watchedPRs")
+        }
+    }
+
+    private func loadWatchedPRs() {
+        if let data = UserDefaults.standard.data(forKey: "watchedPRs"),
+           let prs = try? JSONDecoder().decode([WatchedPR].self, from: data) {
+            watchedPRs = prs
         }
     }
 
