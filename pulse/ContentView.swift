@@ -613,6 +613,7 @@ struct RepositoryRow: View {
 struct NotificationsTabView: View {
     @Bindable var gitHubService: GitHubService
     @Binding var pollingMinutes: Double
+    @State private var reminderMinutes: Double = 10
 
     var body: some View {
         ScrollView {
@@ -665,8 +666,50 @@ struct NotificationsTabView: View {
                         }
                     }
                 }
+
+                Divider()
+
+                // Review Reminders section
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Review Reminders")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Enable review reminders", isOn: $gitHubService.isReminderEnabled)
+
+                    if gitHubService.isReminderEnabled {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Remind every \(Int(reminderMinutes)) minutes")
+                                .font(.caption)
+
+                            Slider(value: $reminderMinutes, in: 5...60, step: 5) { editing in
+                                if !editing {
+                                    gitHubService.reminderInterval = reminderMinutes * 60
+                                }
+                            }
+                        }
+
+                        if !gitHubService.watchedPRs.isEmpty {
+                            HStack {
+                                Text("Watching \(gitHubService.watchedPRs.count) PR\(gitHubService.watchedPRs.count == 1 ? "" : "s")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Clear All") {
+                                    gitHubService.clearAllWatchedPRs()
+                                }
+                                .font(.caption)
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.red)
+                            }
+                        }
+                    }
+                }
             }
             .padding()
+        }
+        .onAppear {
+            reminderMinutes = gitHubService.reminderInterval / 60
         }
     }
 
