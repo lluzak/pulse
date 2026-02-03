@@ -227,6 +227,11 @@ class PRNotificationWindowController {
         // Simple immediate close - no animation to avoid crashes
         windowToClose.orderOut(nil)
     }
+
+    func showReminder(for watchedPRs: [WatchedPR]) {
+        // TODO: Implement in Task 6 - will show reminder notification UI
+        // This stub allows the code to compile; full implementation pending
+    }
 }
 
 // MARK: - Settings Window Controller

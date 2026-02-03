@@ -74,7 +74,8 @@ class GitHubService {
         didSet { UserDefaults.standard.set(pollingInterval, forKey: "pollingInterval") }
     }
     private var pollingTask: Task<Void, Never>?
-    
+    private var reminderPollingTask: Task<Void, Never>?
+
     // Notification tracking
     private var previousPRIds: Set<Int> = []
     
@@ -122,6 +123,7 @@ class GitHubService {
     
     deinit {
         pollingTask?.cancel()
+        reminderPollingTask?.cancel()
     }
     
     // MARK: - Notifications
@@ -424,6 +426,11 @@ class GitHubService {
             lastReminderAt: nil
         )
         watchedPRs.append(watched)
+
+        // Start polling if this is the first watched PR
+        if watchedPRs.count == 1 {
+            startReminderPolling()
+        }
     }
 
     func stopWatching(prId: Int) {
@@ -536,6 +543,67 @@ class GitHubService {
         // Check if user has reviewed
         let hasReviewed = await hasUserReviewedPR(owner: pr.owner, repo: pr.repo, number: pr.prNumber)
         return hasReviewed ? .reviewed : .needsReminder
+    }
+
+    func startReminderPolling() {
+        reminderPollingTask?.cancel()
+        guard isReminderEnabled && !watchedPRs.isEmpty else { return }
+
+        reminderPollingTask = Task {
+            while !Task.isCancelled {
+                await checkWatchedPRs()
+                try? await Task.sleep(nanoseconds: UInt64(reminderInterval * 1_000_000_000))
+            }
+        }
+    }
+
+    func stopReminderPolling() {
+        reminderPollingTask?.cancel()
+        reminderPollingTask = nil
+    }
+
+    func checkWatchedPRs() async {
+        guard !watchedPRs.isEmpty else {
+            stopReminderPolling()
+            return
+        }
+
+        var prsNeedingReminder: [WatchedPR] = []
+        var prsToRemove: [Int] = []
+
+        for pr in watchedPRs {
+            let status = await checkWatchedPRStatus(pr: pr)
+
+            switch status {
+            case .reviewed, .closed:
+                prsToRemove.append(pr.id)
+            case .needsReminder:
+                prsNeedingReminder.append(pr)
+            }
+        }
+
+        // Remove completed/closed PRs
+        for prId in prsToRemove {
+            stopWatching(prId: prId)
+        }
+
+        // Send reminders
+        if !prsNeedingReminder.isEmpty {
+            await MainActor.run {
+                sendReminderNotification(for: prsNeedingReminder)
+            }
+        }
+
+        // Stop polling if no more watched PRs
+        if watchedPRs.isEmpty {
+            stopReminderPolling()
+        }
+    }
+
+    func sendReminderNotification(for watchedPRs: [WatchedPR]) {
+        DispatchQueue.main.async {
+            PRNotificationWindowController.shared.showReminder(for: watchedPRs)
+        }
     }
 
     func openPRInBrowser(_ pr: PullRequest) {
