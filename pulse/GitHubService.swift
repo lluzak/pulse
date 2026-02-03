@@ -53,10 +53,23 @@ class GitHubService {
         didSet { saveWatchedPRs() }
     }
     var isReminderEnabled: Bool = true {
-        didSet { UserDefaults.standard.set(isReminderEnabled, forKey: "isReminderEnabled") }
+        didSet {
+            UserDefaults.standard.set(isReminderEnabled, forKey: "isReminderEnabled")
+            if isReminderEnabled && !watchedPRs.isEmpty {
+                startReminderPolling()
+            } else {
+                stopReminderPolling()
+            }
+        }
     }
     var reminderInterval: TimeInterval = 600 { // 10 minutes
-        didSet { UserDefaults.standard.set(reminderInterval, forKey: "reminderInterval") }
+        didSet {
+            UserDefaults.standard.set(reminderInterval, forKey: "reminderInterval")
+            // Restart polling with new interval if active
+            if isReminderEnabled && !watchedPRs.isEmpty {
+                startReminderPolling()
+            }
+        }
     }
 
     // Polling
@@ -404,7 +417,13 @@ class GitHubService {
     private func loadWatchedPRs() {
         if let data = UserDefaults.standard.data(forKey: "watchedPRs"),
            let prs = try? JSONDecoder().decode([WatchedPR].self, from: data) {
+            // Set directly to avoid triggering save
             watchedPRs = prs
+
+            // Start polling if there are watched PRs
+            if !prs.isEmpty && isReminderEnabled {
+                startReminderPolling()
+            }
         }
     }
 
