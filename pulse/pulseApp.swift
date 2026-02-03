@@ -166,14 +166,21 @@ class PRNotificationWindowController {
         window?.close()
 
         // Create the full-screen notification view
-        let notificationView = FullScreenPRNotificationView(prs: prs) { [weak self] pr in
-            if let url = URL(string: pr.htmlURL) {
-                NSWorkspace.shared.open(url)
+        let notificationView = FullScreenPRNotificationView(
+            prs: prs,
+            isReminder: false,
+            onOpen: { [weak self] pr in
+                // Start watching this PR when user opens it
+                GitHubService.shared.startWatching(pr: pr)
+                if let url = URL(string: pr.htmlURL) {
+                    NSWorkspace.shared.open(url)
+                }
+                self?.dismiss()
+            },
+            onDismiss: { [weak self] in
+                self?.dismiss()
             }
-            self?.dismiss()
-        } onDismiss: { [weak self] in
-            self?.dismiss()
-        }
+        )
 
         // Get the screen where the mouse is located, or main screen as fallback
         let mouseLocation = NSEvent.mouseLocation
@@ -229,8 +236,78 @@ class PRNotificationWindowController {
     }
 
     func showReminder(for watchedPRs: [WatchedPR]) {
-        // TODO: Implement in Task 6 - will show reminder notification UI
-        // This stub allows the code to compile; full implementation pending
+        guard !watchedPRs.isEmpty else { return }
+
+        // Cancel any existing timer
+        autoCloseTimer?.invalidate()
+
+        // Close existing window if any
+        window?.close()
+
+        // Create the reminder notification view
+        let notificationView = FullScreenPRNotificationView(
+            prs: [],
+            watchedPRs: watchedPRs,
+            isReminder: true,
+            onOpen: { [weak self] pr in
+                if let url = URL(string: pr.htmlURL) {
+                    NSWorkspace.shared.open(url)
+                }
+                self?.dismiss()
+            },
+            onOpenWatched: { [weak self] watched in
+                if let url = URL(string: watched.htmlURL) {
+                    NSWorkspace.shared.open(url)
+                }
+                self?.dismiss()
+            },
+            onDismiss: { [weak self] in
+                self?.dismiss()
+            },
+            onStopReminding: { [weak self] prId in
+                GitHubService.shared.stopWatching(prId: prId)
+                self?.dismiss()
+            }
+        )
+
+        // Get the screen where the mouse is located
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens.first!
+        let screenFrame = screen.frame
+
+        // Create borderless full-screen window
+        let window = NSWindow(
+            contentRect: screenFrame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+
+        window.contentViewController = NSHostingController(rootView: notificationView)
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = false
+        window.level = .screenSaver
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.ignoresMouseEvents = false
+
+        window.setFrame(screenFrame, display: true)
+
+        window.alphaValue = 0
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.3
+            window.animator().alphaValue = 1
+        }
+
+        self.window = window
+
+        // Auto-close after 15 seconds
+        autoCloseTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
+            self?.dismiss()
+        }
     }
 }
 
@@ -303,8 +380,34 @@ class SettingsWindowController: NSObject, NSWindowDelegate {
 
 struct FullScreenPRNotificationView: View {
     let prs: [PullRequest]
+    let watchedPRs: [WatchedPR]
+    let isReminder: Bool
     let onOpen: (PullRequest) -> Void
+    let onOpenWatched: (WatchedPR) -> Void
     let onDismiss: () -> Void
+    let onStopReminding: ((Int) -> Void)?
+
+    init(
+        prs: [PullRequest] = [],
+        watchedPRs: [WatchedPR] = [],
+        isReminder: Bool = false,
+        onOpen: @escaping (PullRequest) -> Void = { _ in },
+        onOpenWatched: @escaping (WatchedPR) -> Void = { _ in },
+        onDismiss: @escaping () -> Void,
+        onStopReminding: ((Int) -> Void)? = nil
+    ) {
+        self.prs = prs
+        self.watchedPRs = watchedPRs
+        self.isReminder = isReminder
+        self.onOpen = onOpen
+        self.onOpenWatched = onOpenWatched
+        self.onDismiss = onDismiss
+        self.onStopReminding = onStopReminding
+    }
+
+    private var displayCount: Int {
+        isReminder ? watchedPRs.count : prs.count
+    }
 
     var body: some View {
         ZStack {
@@ -317,34 +420,49 @@ struct FullScreenPRNotificationView: View {
 
             // Center content
             VStack(spacing: 40) {
-                // Bell icon with animation
-                Image(systemName: "bell.badge.fill")
+                // Icon with animation
+                Image(systemName: isReminder ? "clock.badge.exclamationmark" : "bell.badge.fill")
                     .font(.system(size: 80))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(isReminder ? .yellow : .orange)
                     .symbolEffect(.pulse, options: .repeating)
 
                 // Main text
                 VStack(spacing: 16) {
-                    Text(prs.count == 1 ? "New PR Review Request" : "\(prs.count) New PR Review Requests")
+                    Text(headerText)
                         .font(.system(size: 42, weight: .bold))
                         .foregroundStyle(.white)
 
-                    Text("Pull request\(prs.count == 1 ? "" : "s") awaiting your review")
+                    Text(subtitleText)
                         .font(.system(size: 20))
                         .foregroundStyle(.white.opacity(0.7))
                 }
 
                 // PR cards
                 VStack(spacing: 12) {
-                    ForEach(prs.prefix(3)) { pr in
-                        PRNotificationCard(pr: pr, onOpen: onOpen)
-                    }
-
-                    if prs.count > 3 {
-                        Text("+ \(prs.count - 3) more")
-                            .font(.headline)
-                            .foregroundStyle(.white.opacity(0.6))
-                            .padding(.top, 8)
+                    if isReminder {
+                        ForEach(watchedPRs.prefix(3)) { watched in
+                            WatchedPRNotificationCard(
+                                watched: watched,
+                                onOpen: onOpenWatched,
+                                onStopReminding: onStopReminding
+                            )
+                        }
+                        if watchedPRs.count > 3 {
+                            Text("+ \(watchedPRs.count - 3) more")
+                                .font(.headline)
+                                .foregroundStyle(.white.opacity(0.6))
+                                .padding(.top, 8)
+                        }
+                    } else {
+                        ForEach(prs.prefix(3)) { pr in
+                            PRNotificationCard(pr: pr, onOpen: onOpen)
+                        }
+                        if prs.count > 3 {
+                            Text("+ \(prs.count - 3) more")
+                                .font(.headline)
+                                .foregroundStyle(.white.opacity(0.6))
+                                .padding(.top, 8)
+                        }
                     }
                 }
                 .frame(maxWidth: 600)
@@ -363,8 +481,22 @@ struct FullScreenPRNotificationView: View {
                     .buttonStyle(.plain)
                     .keyboardShortcut(.escape)
 
-                    if prs.count == 1, let pr = prs.first {
+                    if !isReminder && prs.count == 1, let pr = prs.first {
                         Button(action: { onOpen(pr) }) {
+                            Text("Open PR")
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 32)
+                                .padding(.vertical, 14)
+                                .background(Color.blue)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut(.return)
+                    }
+
+                    if isReminder && watchedPRs.count == 1, let watched = watchedPRs.first {
+                        Button(action: { onOpenWatched(watched) }) {
                             Text("Open PR")
                                 .font(.headline)
                                 .foregroundStyle(.white)
@@ -386,6 +518,26 @@ struct FullScreenPRNotificationView: View {
                     .padding(.top, 20)
             }
             .padding(60)
+        }
+    }
+
+    private var headerText: String {
+        if isReminder {
+            return watchedPRs.count == 1 ? "Review Reminder" : "\(watchedPRs.count) Review Reminders"
+        } else {
+            return prs.count == 1 ? "New PR Review Request" : "\(prs.count) New PR Review Requests"
+        }
+    }
+
+    private var subtitleText: String {
+        if isReminder {
+            if watchedPRs.count == 1, let watched = watchedPRs.first {
+                let minutes = Int(Date().timeIntervalSince(watched.startedWatchingAt) / 60)
+                return "You opened this \(minutes) minute\(minutes == 1 ? "" : "s") ago"
+            }
+            return "PRs you opened but haven't reviewed yet"
+        } else {
+            return "Pull request\(prs.count == 1 ? "" : "s") awaiting your review"
         }
     }
 }
@@ -440,6 +592,68 @@ struct PRNotificationCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+struct WatchedPRNotificationCard: View {
+    let watched: WatchedPR
+    let onOpen: (WatchedPR) -> Void
+    let onStopReminding: ((Int) -> Void)?
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Button(action: { onOpen(watched) }) {
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(watched.repository)
+                            .font(.subheadline)
+                            .foregroundStyle(.blue)
+
+                        Text(watched.title)
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+
+                        HStack(spacing: 12) {
+                            Label("#\(watched.prNumber)", systemImage: "number")
+                            Label(watched.authorLogin, systemImage: "person.fill")
+
+                            let minutes = Int(Date().timeIntervalSince(watched.startedWatchingAt) / 60)
+                            Label("\(minutes)m ago", systemImage: "clock")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.title)
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
+            .buttonStyle(.plain)
+
+            if let onStopReminding = onStopReminding {
+                Button(action: { onStopReminding(watched.id) }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+                .help("Stop reminding about this PR")
+            }
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white.opacity(isHovered ? 0.15 : 0.1))
+        )
+        .contentShape(Rectangle())
         .onHover { isHovered = $0 }
     }
 }
