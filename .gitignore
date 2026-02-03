@@ -12,3 +12,6 @@ xcuserdata/
 # SwiftPM
 .build/
 Package.resolved
+
+# Worktrees
+.worktrees/
