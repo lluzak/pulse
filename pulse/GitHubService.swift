@@ -587,11 +587,33 @@ struct PRReview: Codable {
     let user: PRUser
     let state: String
     let submittedAt: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case id, user, state
         case submittedAt = "submitted_at"
     }
+}
+
+// MARK: - Watched PR Model
+
+struct WatchedPR: Codable, Identifiable {
+    let id: Int
+    let prNumber: Int
+    let owner: String
+    let repo: String
+    let repository: String
+    let title: String
+    let htmlURL: String
+    let authorLogin: String
+    let authorAvatarURL: String
+    let startedWatchingAt: Date
+    var lastReminderAt: Date?
+}
+
+enum WatchedPRStatus {
+    case needsReminder
+    case reviewed
+    case closed
 }
 
 // MARK: - Keychain Helper

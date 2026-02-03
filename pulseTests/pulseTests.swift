@@ -258,6 +258,41 @@ final class AuthenticationFlowTests: XCTestCase {
         XCTAssertNil(service.currentUser)
     }
 }
+// MARK: - Watched PR Tests
+
+final class WatchedPRTests: XCTestCase {
+
+    func testWatchedPREncoding() throws {
+        let watchedPR = WatchedPR(
+            id: 12345,
+            prNumber: 42,
+            owner: "octocat",
+            repo: "Hello-World",
+            repository: "octocat/Hello-World",
+            title: "Add new feature",
+            htmlURL: "https://github.com/octocat/Hello-World/pull/42",
+            authorLogin: "contributor",
+            authorAvatarURL: "https://github.com/images/avatar.jpg",
+            startedWatchingAt: Date(timeIntervalSince1970: 1700000000),
+            lastReminderAt: nil
+        )
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(watchedPR)
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(WatchedPR.self, from: data)
+
+        XCTAssertEqual(decoded.id, 12345)
+        XCTAssertEqual(decoded.prNumber, 42)
+        XCTAssertEqual(decoded.owner, "octocat")
+        XCTAssertEqual(decoded.repo, "Hello-World")
+        XCTAssertEqual(decoded.repository, "octocat/Hello-World")
+        XCTAssertEqual(decoded.title, "Add new feature")
+        XCTAssertEqual(decoded.authorLogin, "contributor")
+        XCTAssertNil(decoded.lastReminderAt)
+    }
+}
+
 // MARK: - Test Helpers
 
 func createMockPR(
