@@ -25,15 +25,25 @@ final class GitHubServiceTests: XCTestCase {
     }
     
     func testPollingDefaults() {
+        // Clear UserDefaults to test actual defaults
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "isPollingEnabled")
+        defaults.removeObject(forKey: "pollingInterval")
+
         let service = GitHubService()
-        
+
         XCTAssertTrue(service.isPollingEnabled)
         XCTAssertEqual(service.pollingInterval, 300) // 5 minutes
     }
-    
+
     func testRepositoryMonitoringDefaults() {
+        // Clear UserDefaults to test actual defaults
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "monitorAllRepositories")
+        defaults.removeObject(forKey: "monitoredRepositories")
+
         let service = GitHubService()
-        
+
         XCTAssertTrue(service.monitorAllRepositories)
         XCTAssertTrue(service.monitoredRepositories.isEmpty)
     }
@@ -209,31 +219,40 @@ final class PRFilteringTests: XCTestCase {
 // MARK: - Authentication Flow Tests
 
 final class AuthenticationFlowTests: XCTestCase {
-    
+
     func testTokenAuthentication() {
         let service = GitHubService()
-        
+
+        // Initially not authenticated
         XCTAssertFalse(service.isAuthenticated)
-        
+
+        // Setting token alone doesn't authenticate - that requires fetchCurrentUser()
+        // But we can verify the token is stored
         service.personalAccessToken = "test_token_123"
-        XCTAssertTrue(service.isAuthenticated)
+        XCTAssertEqual(service.personalAccessToken, "test_token_123")
+
+        // isAuthenticated is only set after successful API validation
+        // So without mocking the API, it remains false
+        XCTAssertFalse(service.isAuthenticated)
     }
-    
+
     func testSignOutClearsAuth() {
         let service = GitHubService()
-        
+
+        // Simulate a fully authenticated state by setting all required properties
         service.personalAccessToken = "test_token"
+        service.isAuthenticated = true  // Directly set to simulate successful auth
         service.currentUser = GitHubUser(
             login: "testuser",
             id: 123,
             avatarURL: "https://example.com/avatar.jpg",
             name: "Test User"
         )
-        
+
         XCTAssertTrue(service.isAuthenticated)
-        
+
         service.signOut()
-        
+
         XCTAssertFalse(service.isAuthenticated)
         XCTAssertNil(service.personalAccessToken)
         XCTAssertNil(service.currentUser)
