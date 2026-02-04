@@ -288,7 +288,9 @@ final class WatchedPRTests: XCTestCase {
             authorLogin: "contributor",
             authorAvatarURL: "https://github.com/images/avatar.jpg",
             startedWatchingAt: Date(timeIntervalSince1970: 1700000000),
-            lastReminderAt: nil
+            lastReminderAt: nil,
+            lastReviewedAt: nil,
+            lastReviewState: nil
         )
 
         let encoder = JSONEncoder()
@@ -855,7 +857,9 @@ final class SettingsPersistenceTests: XCTestCase {
             authorLogin: "contributor",
             authorAvatarURL: "https://github.com/images/avatar.jpg",
             startedWatchingAt: Date(),
-            lastReminderAt: nil
+            lastReminderAt: nil,
+            lastReviewedAt: nil,
+            lastReviewState: nil
         )
 
         let data = try! JSONEncoder().encode([watchedPR])
@@ -1072,13 +1076,41 @@ final class EdgeCasesTests: XCTestCase {
             authorLogin: "user",
             authorAvatarURL: "https://example.com/avatar.jpg",
             startedWatchingAt: now,
-            lastReminderAt: now
+            lastReminderAt: now,
+            lastReviewedAt: nil,
+            lastReviewState: nil
         )
 
         let data = try JSONEncoder().encode(watchedPR)
         let decoded = try JSONDecoder().decode(WatchedPR.self, from: data)
 
         XCTAssertNotNil(decoded.lastReminderAt)
+    }
+
+    func testWatchedPRWithReviewState() throws {
+        let now = Date()
+        let reviewedAt = Date(timeIntervalSinceNow: -3600) // 1 hour ago
+        let watchedPR = WatchedPR(
+            id: 123,
+            prNumber: 45,
+            owner: "octocat",
+            repo: "Hello-World",
+            repository: "octocat/Hello-World",
+            title: "Test",
+            htmlURL: "https://github.com/octocat/Hello-World/pull/45",
+            authorLogin: "user",
+            authorAvatarURL: "https://example.com/avatar.jpg",
+            startedWatchingAt: now,
+            lastReminderAt: nil,
+            lastReviewedAt: reviewedAt,
+            lastReviewState: "CHANGES_REQUESTED"
+        )
+
+        let data = try JSONEncoder().encode(watchedPR)
+        let decoded = try JSONDecoder().decode(WatchedPR.self, from: data)
+
+        XCTAssertEqual(decoded.lastReviewState, "CHANGES_REQUESTED")
+        XCTAssertNotNil(decoded.lastReviewedAt)
     }
 
     func testMultipleSignOuts() {
@@ -1188,11 +1220,50 @@ final class WatchedPRStatusTests: XCTestCase {
         // Test all enum cases exist
         let statuses: [WatchedPRStatus] = [
             .needsReminder,
-            .reviewed,
+            .waitingForAuthor,
+            .approved,
             .closed
         ]
 
-        XCTAssertEqual(statuses.count, 3)
+        XCTAssertEqual(statuses.count, 4)
+    }
+}
+
+// MARK: - UserReviewStatus Tests
+
+final class UserReviewStatusTests: XCTestCase {
+
+    func testUserReviewStatusNoReview() {
+        let status = UserReviewStatus(hasReviewed: false, state: nil, submittedAt: nil)
+
+        XCTAssertFalse(status.hasReviewed)
+        XCTAssertNil(status.state)
+        XCTAssertNil(status.submittedAt)
+    }
+
+    func testUserReviewStatusApproved() {
+        let date = Date()
+        let status = UserReviewStatus(hasReviewed: true, state: "APPROVED", submittedAt: date)
+
+        XCTAssertTrue(status.hasReviewed)
+        XCTAssertEqual(status.state, "APPROVED")
+        XCTAssertEqual(status.submittedAt, date)
+    }
+
+    func testUserReviewStatusChangesRequested() {
+        let date = Date()
+        let status = UserReviewStatus(hasReviewed: true, state: "CHANGES_REQUESTED", submittedAt: date)
+
+        XCTAssertTrue(status.hasReviewed)
+        XCTAssertEqual(status.state, "CHANGES_REQUESTED")
+    }
+
+    func testUserReviewStatusCommented() {
+        let date = Date()
+        let status = UserReviewStatus(hasReviewed: true, state: "COMMENTED", submittedAt: date)
+
+        XCTAssertTrue(status.hasReviewed)
+        XCTAssertEqual(status.state, "COMMENTED")
     }
 }
 

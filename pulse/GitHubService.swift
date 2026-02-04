@@ -520,8 +520,10 @@ class GitHubService {
         }
     }
 
-    func hasUserReviewedPR(owner: String, repo: String, number: Int) async -> Bool {
-        guard let token = personalAccessToken, let username = currentUser?.login else { return false }
+    func getUserReviewStatus(owner: String, repo: String, number: Int) async -> UserReviewStatus {
+        guard let token = personalAccessToken, let username = currentUser?.login else {
+            return UserReviewStatus(hasReviewed: false, state: nil, submittedAt: nil)
+        }
 
         let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/pulls/\(number)/reviews")!
         var request = URLRequest(url: url)
@@ -532,36 +534,66 @@ class GitHubService {
             let (data, response) = try await URLSession.shared.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
-                return false
+                return UserReviewStatus(hasReviewed: false, state: nil, submittedAt: nil)
             }
 
             let reviews = try JSONDecoder().decode([PRReviewResponse].self, from: data)
 
-            // Check if user has submitted a review (not PENDING)
+            // Find user's most recent submitted review (not PENDING)
             let validStates = ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]
-            return reviews.contains { review in
-                review.user.login == username && validStates.contains(review.state)
+            let userReviews = reviews
+                .filter { $0.user.login == username && validStates.contains($0.state) }
+                .sorted { ($0.submittedAt ?? "") > ($1.submittedAt ?? "") }
+
+            if let latestReview = userReviews.first {
+                let submittedAt = latestReview.submittedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
+                return UserReviewStatus(
+                    hasReviewed: true,
+                    state: latestReview.state,
+                    submittedAt: submittedAt
+                )
             }
+
+            return UserReviewStatus(hasReviewed: false, state: nil, submittedAt: nil)
         } catch {
             print("[Pulse] Error checking review status: \(error.localizedDescription)")
-            return false
+            return UserReviewStatus(hasReviewed: false, state: nil, submittedAt: nil)
         }
     }
 
-    func checkWatchedPRStatus(pr: WatchedPR) async -> WatchedPRStatus {
+    func checkWatchedPRStatus(pr: WatchedPR) async -> (status: WatchedPRStatus, reviewState: String?, reviewedAt: Date?) {
         // First check if PR is still open
-        if let prDetails = await fetchPRDetails(owner: pr.owner, repo: pr.repo, number: pr.prNumber) {
-            if prDetails.state != "open" {
-                return .closed
-            }
-        } else {
+        guard let prDetails = await fetchPRDetails(owner: pr.owner, repo: pr.repo, number: pr.prNumber) else {
             // Can't fetch PR, assume closed/deleted
-            return .closed
+            return (.closed, nil, nil)
         }
 
-        // Check if user has reviewed
-        let hasReviewed = await hasUserReviewedPR(owner: pr.owner, repo: pr.repo, number: pr.prNumber)
-        return hasReviewed ? .reviewed : .needsReminder
+        if prDetails.state != "open" {
+            return (.closed, nil, nil)
+        }
+
+        // Get user's review status
+        let reviewStatus = await getUserReviewStatus(owner: pr.owner, repo: pr.repo, number: pr.prNumber)
+
+        // If user approved → done, remove from list
+        if reviewStatus.state == "APPROVED" {
+            return (.approved, reviewStatus.state, reviewStatus.submittedAt)
+        }
+
+        // If user submitted CHANGES_REQUESTED or COMMENTED
+        if reviewStatus.hasReviewed, let reviewedAt = reviewStatus.submittedAt {
+            // Check if author responded (PR updated after review)
+            if prDetails.updatedDate > reviewedAt {
+                // Author responded, remind again
+                return (.needsReminder, reviewStatus.state, reviewStatus.submittedAt)
+            } else {
+                // Still waiting for author
+                return (.waitingForAuthor, reviewStatus.state, reviewStatus.submittedAt)
+            }
+        }
+
+        // No review yet → remind
+        return (.needsReminder, nil, nil)
     }
 
     func startReminderPolling() {
@@ -589,15 +621,39 @@ class GitHubService {
 
         var prsNeedingReminder: [WatchedPR] = []
         var prsToRemove: [Int] = []
+        var prsToUpdate: [(id: Int, reviewState: String?, reviewedAt: Date?)] = []
 
         for pr in watchedPRs {
-            let status = await checkWatchedPRStatus(pr: pr)
+            // Skip if not enough time passed since watching started (initial delay)
+            let timeSinceStart = Date().timeIntervalSince(pr.startedWatchingAt)
+            if timeSinceStart < reminderInterval {
+                continue
+            }
+
+            let (status, reviewState, reviewedAt) = await checkWatchedPRStatus(pr: pr)
 
             switch status {
-            case .reviewed, .closed:
+            case .approved, .closed:
                 prsToRemove.append(pr.id)
+            case .waitingForAuthor:
+                // Update review state but don't remind (waiting for author)
+                if reviewState != pr.lastReviewState || reviewedAt != pr.lastReviewedAt {
+                    prsToUpdate.append((pr.id, reviewState, reviewedAt))
+                }
             case .needsReminder:
+                // Update review state if changed
+                if reviewState != pr.lastReviewState || reviewedAt != pr.lastReviewedAt {
+                    prsToUpdate.append((pr.id, reviewState, reviewedAt))
+                }
                 prsNeedingReminder.append(pr)
+            }
+        }
+
+        // Update review states
+        for update in prsToUpdate {
+            if let index = watchedPRs.firstIndex(where: { $0.id == update.id }) {
+                watchedPRs[index].lastReviewState = update.reviewState
+                watchedPRs[index].lastReviewedAt = update.reviewedAt
             }
         }
 
@@ -814,12 +870,22 @@ struct WatchedPR: Codable, Identifiable {
     let authorAvatarURL: String
     let startedWatchingAt: Date
     var lastReminderAt: Date?
+    var lastReviewedAt: Date?       // When user last submitted review
+    var lastReviewState: String?    // APPROVED, CHANGES_REQUESTED, COMMENTED
 }
 
 enum WatchedPRStatus {
-    case needsReminder
-    case reviewed
-    case closed
+    case needsReminder      // No review yet, or author responded after review
+    case waitingForAuthor   // User reviewed, waiting for author response
+    case approved           // User approved, can remove
+    case closed             // PR closed/merged
+}
+
+// Review status returned from GitHub API check
+struct UserReviewStatus {
+    let hasReviewed: Bool
+    let state: String?      // APPROVED, CHANGES_REQUESTED, COMMENTED
+    let submittedAt: Date?
 }
 
 // MARK: - Keychain Helper
