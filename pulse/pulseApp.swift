@@ -143,6 +143,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPopover(relativeTo button: NSStatusBarButton) {
         guard let popover = popover else { return }
+        // Ensure correct appearance before showing
+        updatePopoverAppearance()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         eventMonitor?.start()
     }
@@ -153,13 +155,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func systemAppearanceChanged() {
-        updatePopoverAppearance()
+        // Small delay to ensure system appearance is updated
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.updatePopoverAppearance()
+        }
     }
 
     private func updatePopoverAppearance() {
-        // Sync popover appearance with system theme
-        let isDarkMode = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
-        popover?.appearance = NSAppearance(named: isDarkMode ? .darkAqua : .aqua)
+        // Use NSApp.effectiveAppearance which is the authoritative source
+        let appearance = NSApp.effectiveAppearance
+        popover?.appearance = appearance
+        popover?.contentViewController?.view.appearance = appearance
     }
 }
 
