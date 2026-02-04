@@ -434,8 +434,8 @@ class GitHubService {
         let watched = WatchedPR(
             id: pr.id,
             prNumber: pr.number,
-            owner: pr.base.repo.fullName.components(separatedBy: "/").first ?? "",
-            repo: pr.base.repo.name,
+            owner: pr.base.repo?.fullName.components(separatedBy: "/").first ?? "",
+            repo: pr.base.repo?.name ?? "",
             repository: pr.repository,
             title: pr.title,
             htmlURL: pr.htmlURL,
@@ -493,6 +493,20 @@ class GitHubService {
 
             return detailedPRs
 
+        } catch let decodingError as DecodingError {
+            switch decodingError {
+            case .keyNotFound(let key, let context):
+                print("[Pulse] Search decode error - missing key '\(key.stringValue)' at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            case .valueNotFound(let type, let context):
+                print("[Pulse] Search decode error - missing value of type '\(type)' at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            case .typeMismatch(let type, let context):
+                print("[Pulse] Search decode error - type mismatch '\(type)' at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            case .dataCorrupted(let context):
+                print("[Pulse] Search decode error - data corrupted at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            @unknown default:
+                print("[Pulse] Search decode error: \(decodingError.localizedDescription)")
+            }
+            return []
         } catch {
             print("[Pulse] Search error: \(error.localizedDescription)")
             return []
@@ -515,7 +529,22 @@ class GitHubService {
             }
 
             return try JSONDecoder().decode(PullRequest.self, from: data)
+        } catch let decodingError as DecodingError {
+            switch decodingError {
+            case .keyNotFound(let key, let context):
+                print("[Pulse] PR decode error (\(owner)/\(repo)#\(number)) - missing key '\(key.stringValue)' at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            case .valueNotFound(let type, let context):
+                print("[Pulse] PR decode error (\(owner)/\(repo)#\(number)) - missing value of type '\(type)' at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            case .typeMismatch(let type, let context):
+                print("[Pulse] PR decode error (\(owner)/\(repo)#\(number)) - type mismatch '\(type)' at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            case .dataCorrupted(let context):
+                print("[Pulse] PR decode error (\(owner)/\(repo)#\(number)) - data corrupted at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            @unknown default:
+                print("[Pulse] PR decode error (\(owner)/\(repo)#\(number)): \(decodingError.localizedDescription)")
+            }
+            return nil
         } catch {
+            print("[Pulse] PR fetch error (\(owner)/\(repo)#\(number)): \(error.localizedDescription)")
             return nil
         }
     }
@@ -788,7 +817,7 @@ struct PullRequest: Codable, Identifiable {
     let changedFiles: Int?
     
     var repository: String {
-        base.repo.fullName
+        base.repo?.fullName ?? "unknown"
     }
     
     var createdDate: Date {
@@ -820,7 +849,7 @@ struct PRUser: Codable {
 
 struct PRBranch: Codable {
     let ref: String
-    let repo: PRRepository
+    let repo: PRRepository?  // Can be null for deleted forks
 }
 
 struct PRRepository: Codable {

@@ -452,7 +452,7 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertFalse(pr.draft)
         XCTAssertEqual(pr.head.ref, "feature-branch")
         XCTAssertEqual(pr.base.ref, "main")
-        XCTAssertEqual(pr.base.repo.fullName, "octocat/Hello-World")
+        XCTAssertEqual(pr.base.repo?.fullName, "octocat/Hello-World")
         XCTAssertEqual(pr.additions, 100)
         XCTAssertEqual(pr.deletions, 50)
         XCTAssertEqual(pr.changedFiles, 5)
@@ -532,8 +532,64 @@ final class ModelDecodingTests: XCTestCase {
         let branch = try JSONDecoder().decode(PRBranch.self, from: data)
 
         XCTAssertEqual(branch.ref, "feature-branch")
-        XCTAssertEqual(branch.repo.name, "Hello-World")
-        XCTAssertEqual(branch.repo.fullName, "octocat/Hello-World")
+        XCTAssertEqual(branch.repo?.name, "Hello-World")
+        XCTAssertEqual(branch.repo?.fullName, "octocat/Hello-World")
+    }
+
+    func testPRBranchWithNullRepo() throws {
+        // Test for deleted fork scenario where head.repo is null
+        let json = """
+        {
+            "ref": "feature-branch",
+            "repo": null
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let branch = try JSONDecoder().decode(PRBranch.self, from: data)
+
+        XCTAssertEqual(branch.ref, "feature-branch")
+        XCTAssertNil(branch.repo)
+    }
+
+    func testPullRequestWithDeletedFork() throws {
+        // Test PR where head.repo is null (fork was deleted)
+        let json = """
+        {
+            "id": 99999,
+            "number": 100,
+            "title": "PR from deleted fork",
+            "body": null,
+            "html_url": "https://github.com/octocat/Hello-World/pull/100",
+            "state": "open",
+            "created_at": "2024-01-29T10:00:00Z",
+            "updated_at": "2024-01-29T15:30:00Z",
+            "user": {
+                "login": "contributor",
+                "avatar_url": "https://github.com/images/avatar.jpg"
+            },
+            "draft": false,
+            "head": {
+                "ref": "feature-branch",
+                "repo": null
+            },
+            "base": {
+                "ref": "main",
+                "repo": {
+                    "name": "Hello-World",
+                    "full_name": "octocat/Hello-World"
+                }
+            }
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let pr = try JSONDecoder().decode(PullRequest.self, from: data)
+
+        XCTAssertEqual(pr.id, 99999)
+        XCTAssertNil(pr.head.repo)
+        XCTAssertNotNil(pr.base.repo)
+        XCTAssertEqual(pr.repository, "octocat/Hello-World")
     }
 
     func testPRRepositoryDecoding() throws {
