@@ -653,6 +653,11 @@ struct NotificationsTabView: View {
 
                     Toggle("Enable auto-refresh", isOn: $gitHubService.isPollingEnabled)
 
+                    Text("Automatically checks GitHub for new PRs awaiting your review and shows a notification when new ones appear.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     if gitHubService.isPollingEnabled {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Refresh every \(Int(pollingMinutes)) minute\(Int(pollingMinutes) == 1 ? "" : "s")")
