@@ -204,6 +204,11 @@ class PRNotificationWindowController {
                 }
                 self?.dismiss()
             },
+            onReviewLater: { [weak self] pr in
+                // Just start watching, don't open the PR
+                GitHubService.shared.startWatching(pr: pr)
+                self?.dismiss()
+            },
             onDismiss: { [weak self] in
                 self?.dismiss()
             }
@@ -411,6 +416,7 @@ struct FullScreenPRNotificationView: View {
     let isReminder: Bool
     let onOpen: (PullRequest) -> Void
     let onOpenWatched: (WatchedPR) -> Void
+    let onReviewLater: ((PullRequest) -> Void)?
     let onDismiss: () -> Void
     let onStopReminding: ((Int) -> Void)?
 
@@ -420,6 +426,7 @@ struct FullScreenPRNotificationView: View {
         isReminder: Bool = false,
         onOpen: @escaping (PullRequest) -> Void = { _ in },
         onOpenWatched: @escaping (WatchedPR) -> Void = { _ in },
+        onReviewLater: ((PullRequest) -> Void)? = nil,
         onDismiss: @escaping () -> Void,
         onStopReminding: ((Int) -> Void)? = nil
     ) {
@@ -428,6 +435,7 @@ struct FullScreenPRNotificationView: View {
         self.isReminder = isReminder
         self.onOpen = onOpen
         self.onOpenWatched = onOpenWatched
+        self.onReviewLater = onReviewLater
         self.onDismiss = onDismiss
         self.onStopReminding = onStopReminding
     }
@@ -509,17 +517,32 @@ struct FullScreenPRNotificationView: View {
                     .keyboardShortcut(.escape)
 
                     if !isReminder && prs.count == 1, let pr = prs.first {
+                        // Open PR button (secondary)
                         Button(action: { onOpen(pr) }) {
                             Text("Open PR")
                                 .font(.headline)
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 32)
                                 .padding(.vertical, 14)
-                                .background(Color.blue)
+                                .background(Color.white.opacity(0.2))
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                         }
                         .buttonStyle(.plain)
-                        .keyboardShortcut(.return)
+
+                        // Review Later button (primary)
+                        if let onReviewLater = onReviewLater {
+                            Button(action: { onReviewLater(pr) }) {
+                                Text("Review Later")
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 32)
+                                    .padding(.vertical, 14)
+                                    .background(Color.blue)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
+                            .keyboardShortcut(.return)
+                        }
                     }
 
                     if isReminder && watchedPRs.count == 1, let watched = watchedPRs.first {

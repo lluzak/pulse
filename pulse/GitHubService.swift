@@ -602,8 +602,9 @@ class GitHubService {
 
         reminderPollingTask = Task {
             while !Task.isCancelled {
-                await checkWatchedPRs()
+                // Sleep first, then check - prevents immediate reminder after adding PR
                 try? await Task.sleep(nanoseconds: UInt64(reminderInterval * 1_000_000_000))
+                await checkWatchedPRs()
             }
         }
     }
