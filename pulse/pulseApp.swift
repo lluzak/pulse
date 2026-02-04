@@ -145,8 +145,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let popover = popover else { return }
         // Ensure correct appearance before showing
         updatePopoverAppearance()
+
+        // Activate app BEFORE showing popover to ensure proper focus
+        NSApp.activate(ignoringOtherApps: true)
+
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         eventMonitor?.start()
+
+        // Make the popover's window key and first responder
+        if let window = popover.contentViewController?.view.window {
+            window.makeKey()
+            window.makeFirstResponder(popover.contentViewController?.view)
+        }
     }
 
     private func closePopover() {
