@@ -677,6 +677,11 @@ struct NotificationsTabView: View {
 
                     Toggle("Enable review reminders", isOn: $gitHubService.isReminderEnabled)
 
+                    Text("When you click \"Open PR\" on a notification, Pulse tracks it and reminds you until you approve. If you request changes or comment, reminders pause until the author responds.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     if gitHubService.isReminderEnabled {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Remind every \(Int(reminderMinutes)) minutes")
