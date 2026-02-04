@@ -236,16 +236,30 @@ struct PRListView: View {
                     ProgressView()
                         .padding(.bottom, 8)
                 }
-                Image(systemName: selectedTab == .awaitingReview ? "checkmark.circle.fill" : "tray")
-                    .font(.system(size: 48))
-                    .foregroundStyle(selectedTab == .awaitingReview ? .green : .gray)
 
-                Text(selectedTab == .awaitingReview ? "All caught up!" : "No PRs")
-                    .font(.headline)
+                if let error = gitHubService.errorMessage {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.red)
+                    Text("Error loading PRs")
+                        .font(.headline)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                } else {
+                    Image(systemName: selectedTab == .awaitingReview ? "checkmark.circle.fill" : "tray")
+                        .font(.system(size: 48))
+                        .foregroundStyle(selectedTab == .awaitingReview ? .green : .gray)
 
-                Text(selectedTab == .awaitingReview ? "No PRs awaiting your review" : "No PRs you're involved with")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    Text(selectedTab == .awaitingReview ? "All caught up!" : "No PRs")
+                        .font(.headline)
+
+                    Text(selectedTab == .awaitingReview ? "No PRs awaiting your review" : "No PRs you're involved with")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxHeight: .infinity)
         } else {
