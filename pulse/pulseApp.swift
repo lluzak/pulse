@@ -67,6 +67,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = NSHostingController(rootView: MenuBarView())
         self.popover = popover
 
+        // Sync popover appearance with system theme
+        updatePopoverAppearance()
+
+        // Observe system appearance changes
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(systemAppearanceChanged),
+            name: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil
+        )
+
         // Monitor for clicks outside the popover
         eventMonitor = EventMonitor(mask: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             if let popover = self?.popover, popover.isShown {
@@ -139,6 +150,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func closePopover() {
         popover?.performClose(nil)
         eventMonitor?.stop()
+    }
+
+    @objc private func systemAppearanceChanged() {
+        updatePopoverAppearance()
+    }
+
+    private func updatePopoverAppearance() {
+        // Sync popover appearance with system theme
+        let isDarkMode = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
+        popover?.appearance = NSAppearance(named: isDarkMode ? .darkAqua : .aqua)
     }
 }
 
