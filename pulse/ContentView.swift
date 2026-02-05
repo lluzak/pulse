@@ -882,6 +882,44 @@ struct NotificationsTabView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+
+                Divider()
+
+                // My PRs Notifications section
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("My PRs Notifications")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Text("Get notified about activity on pull requests you created.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Approvals", isOn: $gitHubService.myPRNotificationSettings.notifyOnApproval)
+                        Toggle("Changes Requested", isOn: $gitHubService.myPRNotificationSettings.notifyOnChangesRequested)
+                        Toggle("Review Comments", isOn: $gitHubService.myPRNotificationSettings.notifyOnReviewComment)
+                        Toggle("Comments", isOn: $gitHubService.myPRNotificationSettings.notifyOnComment)
+                        Toggle("CI Failures", isOn: $gitHubService.myPRNotificationSettings.notifyOnCheckFailure)
+                        Toggle("CI Success", isOn: $gitHubService.myPRNotificationSettings.notifyOnCheckSuccess)
+                        Toggle("Mentions", isOn: $gitHubService.myPRNotificationSettings.notifyOnMention)
+                        Toggle("Merged", isOn: $gitHubService.myPRNotificationSettings.notifyOnMerge)
+                        Toggle("Merge Conflicts", isOn: $gitHubService.myPRNotificationSettings.notifyOnConflict)
+                    }
+                    .font(.subheadline)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Toggle("Batch notifications", isOn: $gitHubService.myPRNotificationSettings.batchNotifications)
+                        .font(.subheadline)
+
+                    Text("When enabled, notifications are grouped and sent once per poll cycle instead of immediately.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding()
         }
