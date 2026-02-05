@@ -886,6 +886,10 @@ class GitHubService {
         dismissedPRIds.insert(id)
         // Also stop watching if we were
         stopWatching(prId: id)
+        // Remove from current lists immediately
+        awaitingReviewPRs.removeAll { $0.id == id }
+        involvedPRs.removeAll { $0.id == id }
+        myPRs.removeAll { $0.id == id }
     }
 
     func undismissPR(id: Int) {
