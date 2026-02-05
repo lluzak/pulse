@@ -790,6 +790,87 @@ final class ModelDecodingTests: XCTestCase {
 
         XCTAssertEqual(review.state, "CHANGES_REQUESTED")
     }
+
+    func testPullRequestWithMergedAt() throws {
+        let json = """
+        {
+            "id": 12345,
+            "number": 42,
+            "title": "Merged PR",
+            "body": null,
+            "html_url": "https://github.com/octocat/Hello-World/pull/42",
+            "state": "closed",
+            "created_at": "2024-01-29T10:00:00Z",
+            "updated_at": "2024-01-29T15:30:00Z",
+            "merged_at": "2024-01-29T15:00:00Z",
+            "user": {
+                "login": "contributor",
+                "avatar_url": "https://github.com/images/avatar.jpg"
+            },
+            "draft": false,
+            "head": {
+                "ref": "feature-branch",
+                "repo": {
+                    "name": "Hello-World",
+                    "full_name": "octocat/Hello-World"
+                }
+            },
+            "base": {
+                "ref": "main",
+                "repo": {
+                    "name": "Hello-World",
+                    "full_name": "octocat/Hello-World"
+                }
+            }
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let pr = try JSONDecoder().decode(PullRequest.self, from: data)
+
+        XCTAssertEqual(pr.state, "closed")
+        XCTAssertEqual(pr.mergedAt, "2024-01-29T15:00:00Z")
+    }
+
+    func testPullRequestWithoutMergedAt() throws {
+        let json = """
+        {
+            "id": 12345,
+            "number": 42,
+            "title": "Open PR",
+            "body": null,
+            "html_url": "https://github.com/octocat/Hello-World/pull/42",
+            "state": "open",
+            "created_at": "2024-01-29T10:00:00Z",
+            "updated_at": "2024-01-29T15:30:00Z",
+            "user": {
+                "login": "contributor",
+                "avatar_url": "https://github.com/images/avatar.jpg"
+            },
+            "draft": false,
+            "head": {
+                "ref": "feature-branch",
+                "repo": {
+                    "name": "Hello-World",
+                    "full_name": "octocat/Hello-World"
+                }
+            },
+            "base": {
+                "ref": "main",
+                "repo": {
+                    "name": "Hello-World",
+                    "full_name": "octocat/Hello-World"
+                }
+            }
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let pr = try JSONDecoder().decode(PullRequest.self, from: data)
+
+        XCTAssertEqual(pr.state, "open")
+        XCTAssertNil(pr.mergedAt)
+    }
 }
 
 // MARK: - Settings Persistence Tests
@@ -1323,6 +1404,209 @@ final class UserReviewStatusTests: XCTestCase {
     }
 }
 
+// MARK: - PRStateFilter Tests
+
+final class PRStateFilterTests: XCTestCase {
+
+    func testPRStateFilterCases() {
+        let cases = PRStateFilter.allCases
+        XCTAssertEqual(cases.count, 4)
+        XCTAssertTrue(cases.contains(.open))
+        XCTAssertTrue(cases.contains(.closed))
+        XCTAssertTrue(cases.contains(.merged))
+        XCTAssertTrue(cases.contains(.all))
+    }
+
+    func testPRStateFilterQueryValues() {
+        XCTAssertEqual(PRStateFilter.open.queryValue, "open")
+        XCTAssertEqual(PRStateFilter.closed.queryValue, "closed")
+        XCTAssertNil(PRStateFilter.merged.queryValue)
+        XCTAssertNil(PRStateFilter.all.queryValue)
+    }
+
+    func testPRStateFilterRawValues() {
+        XCTAssertEqual(PRStateFilter.open.rawValue, "Open")
+        XCTAssertEqual(PRStateFilter.closed.rawValue, "Closed")
+        XCTAssertEqual(PRStateFilter.merged.rawValue, "Merged")
+        XCTAssertEqual(PRStateFilter.all.rawValue, "All")
+    }
+}
+
+// MARK: - PRActivity Tests
+
+final class PRActivityTests: XCTestCase {
+
+    func testPRActivityEncoding() throws {
+        let activity = PRActivity(
+            commentCount: 5,
+            reviewCount: 3,
+            approvalCount: 2,
+            changesRequestedCount: 1,
+            latestReviewState: "APPROVED",
+            isMerged: false,
+            mergedAt: nil,
+            hasConflicts: false,
+            checkStatus: "success"
+        )
+
+        let data = try JSONEncoder().encode(activity)
+        let decoded = try JSONDecoder().decode(PRActivity.self, from: data)
+
+        XCTAssertEqual(decoded.commentCount, 5)
+        XCTAssertEqual(decoded.reviewCount, 3)
+        XCTAssertEqual(decoded.approvalCount, 2)
+        XCTAssertEqual(decoded.changesRequestedCount, 1)
+        XCTAssertEqual(decoded.latestReviewState, "APPROVED")
+        XCTAssertFalse(decoded.isMerged)
+        XCTAssertNil(decoded.mergedAt)
+        XCTAssertFalse(decoded.hasConflicts)
+        XCTAssertEqual(decoded.checkStatus, "success")
+    }
+
+    func testPRActivityEquality() {
+        let activity1 = PRActivity(
+            commentCount: 1,
+            reviewCount: 1,
+            approvalCount: 1,
+            changesRequestedCount: 0,
+            latestReviewState: "APPROVED",
+            isMerged: false,
+            mergedAt: nil,
+            hasConflicts: false,
+            checkStatus: nil
+        )
+
+        let activity2 = PRActivity(
+            commentCount: 1,
+            reviewCount: 1,
+            approvalCount: 1,
+            changesRequestedCount: 0,
+            latestReviewState: "APPROVED",
+            isMerged: false,
+            mergedAt: nil,
+            hasConflicts: false,
+            checkStatus: nil
+        )
+
+        XCTAssertEqual(activity1, activity2)
+    }
+}
+
+// MARK: - MyPRNotificationSettings Tests
+
+final class MyPRNotificationSettingsTests: XCTestCase {
+
+    func testDefaultSettings() {
+        let settings = MyPRNotificationSettings()
+
+        XCTAssertTrue(settings.notifyOnApproval)
+        XCTAssertTrue(settings.notifyOnChangesRequested)
+        XCTAssertTrue(settings.notifyOnReviewComment)
+        XCTAssertTrue(settings.notifyOnComment)
+        XCTAssertTrue(settings.notifyOnCheckFailure)
+        XCTAssertTrue(settings.notifyOnCheckSuccess)
+        XCTAssertTrue(settings.notifyOnMention)
+        XCTAssertTrue(settings.notifyOnMerge)
+        XCTAssertTrue(settings.notifyOnConflict)
+        XCTAssertFalse(settings.batchNotifications)
+    }
+
+    func testSettingsEncoding() throws {
+        var settings = MyPRNotificationSettings()
+        settings.notifyOnApproval = false
+        settings.batchNotifications = true
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(MyPRNotificationSettings.self, from: data)
+
+        XCTAssertFalse(decoded.notifyOnApproval)
+        XCTAssertTrue(decoded.batchNotifications)
+    }
+}
+
+// MARK: - My PRs Service Tests
+
+final class MyPRsServiceTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "myPRsLastActivity")
+        defaults.removeObject(forKey: "myPRNotificationSettings")
+    }
+
+    func testMyPRsInitialState() {
+        let service = GitHubService()
+
+        XCTAssertTrue(service.myPRs.isEmpty)
+        XCTAssertFalse(service.isLoadingMyPRs)
+        XCTAssertFalse(service.hasLoadedMyPRs)
+        XCTAssertEqual(service.myPRsStateFilter, .open)
+    }
+
+    func testMyPRsStateFilterDefault() {
+        let service = GitHubService()
+        XCTAssertEqual(service.myPRsStateFilter, .open)
+    }
+
+    func testMyPRNotificationSettingsDefault() {
+        let service = GitHubService()
+        XCTAssertTrue(service.myPRNotificationSettings.notifyOnApproval)
+        XCTAssertFalse(service.myPRNotificationSettings.batchNotifications)
+    }
+
+    func testMyPRsIncludedInIsLoading() {
+        let service = GitHubService()
+
+        XCTAssertFalse(service.isLoading)
+
+        service.isLoadingMyPRs = true
+        XCTAssertTrue(service.isLoading)
+
+        service.isLoadingMyPRs = false
+        XCTAssertFalse(service.isLoading)
+    }
+
+    func testMyPRsIncludedInHasLoadedOnce() {
+        let service = GitHubService()
+
+        XCTAssertFalse(service.hasLoadedOnce)
+
+        service.hasLoadedMyPRs = true
+        XCTAssertTrue(service.hasLoadedOnce)
+    }
+}
+
+// MARK: - PRReviewSummary Tests
+
+final class PRReviewSummaryTests: XCTestCase {
+
+    func testApprovedStatus() {
+        let summary = PRReviewSummary(approvedCount: 2, changesRequestedCount: 0, commentedCount: 0, pendingCount: 0)
+        XCTAssertEqual(summary.displayText, "2 approved")
+    }
+
+    func testChangesRequestedStatus() {
+        let summary = PRReviewSummary(approvedCount: 1, changesRequestedCount: 1, commentedCount: 0, pendingCount: 0)
+        XCTAssertEqual(summary.displayText, "1 changes")
+    }
+
+    func testCommentedStatus() {
+        let summary = PRReviewSummary(approvedCount: 0, changesRequestedCount: 0, commentedCount: 3, pendingCount: 0)
+        XCTAssertEqual(summary.displayText, "3 comments")
+    }
+
+    func testPendingStatus() {
+        let summary = PRReviewSummary(approvedCount: 0, changesRequestedCount: 0, commentedCount: 0, pendingCount: 2)
+        XCTAssertEqual(summary.displayText, "2 pending")
+    }
+
+    func testNoReviewsStatus() {
+        let summary = PRReviewSummary(approvedCount: 0, changesRequestedCount: 0, commentedCount: 0, pendingCount: 0)
+        XCTAssertEqual(summary.displayText, "No reviews")
+    }
+}
+
 // MARK: - Test Helpers
 
 func createMockPR(
@@ -1333,7 +1617,8 @@ func createMockPR(
     updatedAt: String = "2024-01-29T10:00:00Z",
     draft: Bool = false,
     additions: Int = 10,
-    deletions: Int = 5
+    deletions: Int = 5,
+    mergedAt: String? = nil
 ) -> PullRequest {
     return PullRequest(
         id: id,
@@ -1356,7 +1641,8 @@ func createMockPR(
         ),
         additions: additions,
         deletions: deletions,
-        changedFiles: 3
+        changedFiles: 3,
+        mergedAt: mergedAt
     )
 }
 
