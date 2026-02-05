@@ -1016,6 +1016,65 @@ struct UserReviewStatus {
     let submittedAt: Date?
 }
 
+// MARK: - PR State Filter (for My PRs tab)
+
+enum PRStateFilter: String, CaseIterable {
+    case open = "Open"
+    case closed = "Closed"
+    case merged = "Merged"
+    case all = "All"
+
+    var queryValue: String? {
+        switch self {
+        case .open: return "open"
+        case .closed: return "closed"
+        case .merged: return nil  // Merged is a subset of closed, handled separately
+        case .all: return nil
+        }
+    }
+}
+
+// MARK: - PR Activity Tracking (for My PRs notifications)
+
+struct PRActivity: Codable, Equatable {
+    let commentCount: Int
+    let reviewCount: Int
+    let approvalCount: Int
+    let changesRequestedCount: Int
+    let latestReviewState: String?  // APPROVED, CHANGES_REQUESTED, COMMENTED
+    let isMerged: Bool
+    let mergedAt: Date?
+    let hasConflicts: Bool
+    let checkStatus: String?  // success, failure, pending
+}
+
+// MARK: - My PR Notification Event Types
+
+struct MyPRNotificationSettings: Codable {
+    var notifyOnApproval: Bool = true
+    var notifyOnChangesRequested: Bool = true
+    var notifyOnReviewComment: Bool = true
+    var notifyOnComment: Bool = true
+    var notifyOnCheckFailure: Bool = true
+    var notifyOnCheckSuccess: Bool = true
+    var notifyOnMention: Bool = true
+    var notifyOnMerge: Bool = true
+    var notifyOnConflict: Bool = true
+    var batchNotifications: Bool = false  // false = immediate, true = batched
+}
+
+enum MyPRNotificationEvent {
+    case approval(reviewer: String)
+    case changesRequested(reviewer: String)
+    case reviewComment(reviewer: String)
+    case comment(commenter: String)
+    case checkFailure
+    case checkSuccess
+    case mention
+    case merged
+    case conflict
+}
+
 // MARK: - Keychain Helper
 
 class KeychainHelper {
