@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 
 struct ContentView: View {
     var gitHubService = GitHubService.shared
@@ -140,6 +141,8 @@ struct GitHubAuthView: View {
 struct PRListView: View {
     @Bindable var gitHubService: GitHubService
     @State private var selectedTab: PRTab = .awaitingReview
+    @FocusState private var isFocused: Bool
+    @State private var focusSink: String = ""
 
     enum PRTab: String, CaseIterable {
         case awaitingReview = "Awaiting Review"
@@ -147,6 +150,24 @@ struct PRListView: View {
     }
 
     var body: some View {
+        ZStack {
+            // Invisible TextField to capture focus and enable keyboard events
+            TextField("", text: $focusSink)
+                .textFieldStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .focused($isFocused)
+
+            mainContent
+        }
+        .onAppear {
+            DispatchQueue.main.async {
+                isFocused = true
+            }
+        }
+    }
+
+    private var mainContent: some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
                 HStack {
@@ -177,14 +198,6 @@ struct PRListView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(gitHubService.isLoading)
-
-                    Button(action: {
-                        // Open settings in independent window
-                        NotificationCenter.default.post(name: .openSettings, object: nil)
-                    }) {
-                        Image(systemName: "gearshape")
-                    }
-                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
@@ -203,6 +216,30 @@ struct PRListView: View {
 
             // Per-tab loading and content
             tabContent
+
+            Divider()
+
+            // Footer with settings and quit
+            HStack {
+                Button(action: {
+                    NotificationCenter.default.post(name: .openSettings, object: nil)
+                }) {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button(action: {
+                    NSApplication.shared.terminate(nil)
+                }) {
+                    Image(systemName: "power")
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
         .background {
             // Hidden button for Cmd+R keyboard shortcut
@@ -729,6 +766,36 @@ struct NotificationsTabView: View {
                         }
                     }
                 }
+
+                // Dismissed PRs section
+                if !gitHubService.dismissedPRIds.isEmpty {
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Dismissed PRs")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        HStack {
+                            Text("\(gitHubService.dismissedPRIds.count) PR\(gitHubService.dismissedPRIds.count == 1 ? "" : "s") hidden")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Restore All") {
+                                gitHubService.clearAllDismissedPRs()
+                                Task { await gitHubService.fetchAllPRs() }
+                            }
+                            .font(.caption)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.blue)
+                        }
+
+                        Text("Right-click on any PR to dismiss it. Dismissed PRs won't appear in your list.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
             .padding()
         }
@@ -738,24 +805,7 @@ struct NotificationsTabView: View {
     }
 
     private func testNotification() {
-        let mockPR = PullRequest(
-            id: 99999,
-            number: 123,
-            title: "Add new feature for user authentication",
-            body: "This PR adds OAuth2 support",
-            htmlURL: "https://github.com/octocat/Hello-World/pull/123",
-            state: "open",
-            createdAt: "2024-01-29T10:00:00Z",
-            updatedAt: "2024-01-29T12:00:00Z",
-            user: PRUser(login: "octocat", avatarURL: "https://github.com/images/error/octocat_happy.gif"),
-            draft: false,
-            head: PRBranch(ref: "feature-auth", repo: PRRepository(name: "Hello-World", fullName: "octocat/Hello-World")),
-            base: PRBranch(ref: "main", repo: PRRepository(name: "Hello-World", fullName: "octocat/Hello-World")),
-            additions: 150,
-            deletions: 23,
-            changedFiles: 8
-        )
-        gitHubService.sendNotification(for: [mockPR])
+        gitHubService.sendTestNotification()
     }
 
     private var notificationStatusText: String {
@@ -829,6 +879,55 @@ struct PRRowView: View {
     let pr: PullRequest
     let gitHubService: GitHubService
     @State private var isHovered = false
+    @State private var now = Date()
+
+    // Timer to update countdown
+    let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    // Get watched PR info if this PR is being watched
+    private var watchedPR: WatchedPR? {
+        gitHubService.watchedPRs.first { $0.id == pr.id }
+    }
+
+    // Calculate next reminder time
+    private var nextReminderDate: Date? {
+        guard let watched = watchedPR else { return nil }
+
+        // If snoozed, that's the next reminder time
+        if let snoozedUntil = watched.snoozedUntil, snoozedUntil > now {
+            return snoozedUntil
+        }
+
+        // Otherwise, calculate based on start time and interval
+        let interval = gitHubService.reminderInterval
+        let startTime = watched.startedWatchingAt
+        let timeSinceStart = now.timeIntervalSince(startTime)
+
+        // If we haven't passed the first interval yet
+        if timeSinceStart < interval {
+            return startTime.addingTimeInterval(interval)
+        }
+
+        // Calculate next interval
+        let intervalsPassed = floor(timeSinceStart / interval)
+        return startTime.addingTimeInterval((intervalsPassed + 1) * interval)
+    }
+
+    // Format countdown string
+    private var countdownText: String? {
+        guard let nextReminder = nextReminderDate else { return nil }
+        let remaining = nextReminder.timeIntervalSince(now)
+        if remaining <= 0 { return "soon" }
+
+        let minutes = Int(remaining) / 60
+        let seconds = Int(remaining) % 60
+
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        } else {
+            return "\(seconds)s"
+        }
+    }
 
     var body: some View {
         Button(action: {
@@ -842,9 +941,25 @@ struct PRRowView: View {
                     Text(pr.repository)
                         .font(.caption)
                         .foregroundStyle(.tint)
-                    
+
                     Spacer()
-                    
+
+                    // Show reminder countdown if watching
+                    if let countdown = countdownText {
+                        HStack(spacing: 3) {
+                            Image(systemName: "bell.fill")
+                                .font(.caption2)
+                            Text(countdown)
+                                .font(.caption2)
+                                .monospacedDigit()
+                        }
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.15))
+                        .clipShape(Capsule())
+                    }
+
                     if pr.draft {
                         Text("DRAFT")
                             .font(.caption2)
@@ -901,6 +1016,32 @@ struct PRRowView: View {
                 NSCursor.pointingHand.push()
             } else {
                 NSCursor.pop()
+            }
+        }
+        .onReceive(timer) { _ in
+            now = Date()
+        }
+        .contextMenu {
+            Button(action: {
+                gitHubService.openPRInBrowser(pr)
+            }) {
+                Label("Open in Browser", systemImage: "safari")
+            }
+
+            Divider()
+
+            if watchedPR != nil {
+                Button(action: {
+                    gitHubService.stopWatching(prId: pr.id)
+                }) {
+                    Label("Stop Reminding", systemImage: "bell.slash")
+                }
+            }
+
+            Button(role: .destructive, action: {
+                gitHubService.dismissPR(id: pr.id)
+            }) {
+                Label("Dismiss PR", systemImage: "xmark.circle")
             }
         }
     }

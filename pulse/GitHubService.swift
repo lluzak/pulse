@@ -91,6 +91,14 @@ class GitHubService {
 
     // Notification tracking
     private var previousPRIds: Set<Int> = []
+
+    // Dismissed PRs (won't show in list)
+    var dismissedPRIds: Set<Int> = [] {
+        didSet {
+            // Persist to UserDefaults
+            UserDefaults.standard.set(Array(dismissedPRIds), forKey: "dismissedPRIds")
+        }
+    }
     
     var notificationStatus: NotificationAuthorizationStatus = .notDetermined
     
@@ -125,6 +133,9 @@ class GitHubService {
         }
         if defaults.object(forKey: "reminderInterval") != nil {
             reminderInterval = defaults.double(forKey: "reminderInterval")
+        }
+        if let dismissed = defaults.array(forKey: "dismissedPRIds") as? [Int] {
+            dismissedPRIds = Set(dismissed)
         }
         loadWatchedPRs()
     }
@@ -173,7 +184,30 @@ class GitHubService {
             }
         }
     }
-    
+
+    /// Send a test notification (system notification only, no full-screen or watching)
+    func sendTestNotification() {
+        let center = UNUserNotificationCenter.current()
+
+        let content = UNMutableNotificationContent()
+        content.title = "Test Notification"
+        content.subtitle = "octocat/Hello-World"
+        content.body = "This is a test notification from Pulse"
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: "test-notification-\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+
+        center.add(request) { error in
+            if let error = error {
+                print("[Pulse] Test notification error: \(error.localizedDescription)")
+            }
+        }
+    }
+
     private func requestNotificationPermission() {
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert, .sound, .badge]) { _, error in
@@ -320,7 +354,8 @@ class GitHubService {
         }
 
         previousPRIds = currentPRIds
-        awaitingReviewPRs = sortedPRs
+        // Filter out dismissed PRs
+        awaitingReviewPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) }
         hasLoadedAwaiting = true
         isLoadingAwaiting = false
     }
@@ -355,7 +390,8 @@ class GitHubService {
 
         let sortedPRs = allPRs.sorted { $0.updatedDate > $1.updatedDate }
 
-        involvedPRs = sortedPRs
+        // Filter out dismissed PRs
+        involvedPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) }
         hasLoadedInvolved = true
         isLoadingInvolved = false
     }
@@ -462,6 +498,61 @@ class GitHubService {
 
     func clearAllWatchedPRs() {
         watchedPRs.removeAll()
+    }
+
+    // MARK: - Dismiss PRs
+
+    func dismissPR(id: Int) {
+        dismissedPRIds.insert(id)
+        // Also stop watching if we were
+        stopWatching(prId: id)
+    }
+
+    func undismissPR(id: Int) {
+        dismissedPRIds.remove(id)
+    }
+
+    func clearAllDismissedPRs() {
+        dismissedPRIds.removeAll()
+    }
+
+    func isPRDismissed(id: Int) -> Bool {
+        dismissedPRIds.contains(id)
+    }
+
+    func snoozePR(prId: Int, minutes: Int) {
+        if let index = watchedPRs.firstIndex(where: { $0.id == prId }) {
+            watchedPRs[index].snoozedUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        }
+    }
+
+    func snoozeNewPR(pr: PullRequest, minutes: Int) {
+        // Start watching with a snooze
+        guard !isWatching(prId: pr.id) else {
+            // Already watching, just update snooze
+            snoozePR(prId: pr.id, minutes: minutes)
+            return
+        }
+
+        let watched = WatchedPR(
+            id: pr.id,
+            prNumber: pr.number,
+            owner: pr.base.repo?.fullName.components(separatedBy: "/").first ?? "",
+            repo: pr.base.repo?.name ?? "",
+            repository: pr.repository,
+            title: pr.title,
+            htmlURL: pr.htmlURL,
+            authorLogin: pr.user.login,
+            authorAvatarURL: pr.user.avatarURL,
+            startedWatchingAt: Date(),
+            lastReminderAt: nil,
+            snoozedUntil: Date().addingTimeInterval(TimeInterval(minutes * 60))
+        )
+        watchedPRs.append(watched)
+
+        if watchedPRs.count == 1 {
+            startReminderPolling()
+        }
     }
 
     private func searchPRs(query: String, username: String) async -> [PullRequest] {
@@ -660,6 +751,11 @@ class GitHubService {
                 continue
             }
 
+            // Skip if snoozed
+            if let snoozedUntil = pr.snoozedUntil, Date() < snoozedUntil {
+                continue
+            }
+
             let (status, reviewState, reviewedAt) = await checkWatchedPRStatus(pr: pr)
 
             switch status {
@@ -675,6 +771,7 @@ class GitHubService {
                 if reviewState != pr.lastReviewState || reviewedAt != pr.lastReviewedAt {
                     prsToUpdate.append((pr.id, reviewState, reviewedAt))
                 }
+                print("[Pulse] PR #\(pr.prNumber) still needs review, added to reminder list")
                 prsNeedingReminder.append(pr)
             }
         }
@@ -902,6 +999,7 @@ struct WatchedPR: Codable, Identifiable {
     var lastReminderAt: Date?
     var lastReviewedAt: Date?       // When user last submitted review
     var lastReviewState: String?    // APPROVED, CHANGES_REQUESTED, COMMENTED
+    var snoozedUntil: Date?         // If set, don't remind until this time
 }
 
 enum WatchedPRStatus {

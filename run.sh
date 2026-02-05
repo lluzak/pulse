@@ -18,15 +18,13 @@ done
 
 build_app() {
     echo "Building pulse..."
-    if xcodebuild -scheme pulse -configuration Debug build 2>&1 | grep -E "(error:|warning:|BUILD)" | tail -5; then
-        return 0
-    else
-        return 1
-    fi
+    xcodebuild -scheme pulse -configuration Debug build 2>&1 | grep -E "(error:|warning:|BUILD)" | tail -10
+    return ${PIPESTATUS[0]}
 }
 
 get_app_path() {
-    find ~/Library/Developer/Xcode/DerivedData/pulse-*/Build/Products/Debug/pulse.app -maxdepth 0 2>/dev/null | head -1
+    # Find most recently modified pulse.app
+    find ~/Library/Developer/Xcode/DerivedData/pulse-*/Build/Products/Debug/pulse.app -maxdepth 0 -type d 2>/dev/null | head -1
 }
 
 kill_app() {

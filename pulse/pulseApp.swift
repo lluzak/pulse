@@ -34,9 +34,7 @@ struct pulseApp: App {
 }
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var popover: NSPopover?
-    private var eventMonitor: EventMonitor?
-    private var contextMenu: NSMenu?
+    private var mainMenu: NSMenu?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize GitHubService early to start fetching data at launch
@@ -47,48 +45,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "waveform.path.ecg", accessibilityDescription: "Pulse")
-            button.action = #selector(handleStatusItemClick)
-            button.target = self
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.image?.isTemplate = true // Adapts to menu bar appearance
         }
 
-        // Create the context menu for right-click
-        contextMenu = NSMenu()
-        contextMenu?.addItem(NSMenuItem(title: "About Pulse", action: #selector(openAbout), keyEquivalent: ""))
-        contextMenu?.addItem(NSMenuItem.separator())
-        contextMenu?.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
-        contextMenu?.addItem(NSMenuItem.separator())
-        contextMenu?.addItem(NSMenuItem(title: "Quit Pulse", action: #selector(quitApp), keyEquivalent: "q"))
+        // Create the menu with SwiftUI content only
+        let menu = NSMenu()
+        let contentItem = NSMenuItem()
+        let hostingView = NSHostingView(rootView: MenuBarView())
+        hostingView.frame = NSRect(x: 0, y: 0, width: 400, height: 550)
+        contentItem.view = hostingView
+        menu.addItem(contentItem)
 
-        // Create the popover
-        let popover = NSPopover()
-        popover.contentSize = NSSize(width: 400, height: 550)
-        popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: MenuBarView())
-        self.popover = popover
+        statusItem?.menu = menu
+        self.mainMenu = menu
 
-        // Sync popover appearance with system theme
-        updatePopoverAppearance()
-
-        // Observe system appearance changes
-        DistributedNotificationCenter.default().addObserver(
-            self,
-            selector: #selector(systemAppearanceChanged),
-            name: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
-            object: nil
-        )
-
-        // Monitor for clicks outside the popover
-        eventMonitor = EventMonitor(mask: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            if let popover = self?.popover, popover.isShown {
-                self?.closePopover()
-            }
-        }
-
-        // Hide the dock icon and main window
+        // Hide the dock icon
         NSApp.setActivationPolicy(.accessory)
 
-        // Listen for settings notification from the gear button in popover
+        // Listen for settings notification from the gear button in menu
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(openSettings),
@@ -97,85 +71,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    @objc func handleStatusItemClick() {
-        guard let event = NSApp.currentEvent else { return }
-
-        if event.type == .rightMouseUp {
-            // Show context menu on right-click
-            if let button = statusItem?.button, let menu = contextMenu {
-                statusItem?.menu = menu
-                button.performClick(nil)
-                statusItem?.menu = nil  // Reset so left-click works again
-            }
-        } else {
-            // Toggle popover on left-click
-            togglePopover()
-        }
-    }
-
-    @objc func togglePopover() {
-        guard let button = statusItem?.button else { return }
-
-        if let popover = popover {
-            if popover.isShown {
-                closePopover()
-            } else {
-                showPopover(relativeTo: button)
-            }
-        }
-    }
-
     @objc func openSettings() {
-        // Close the popover and show settings in independent window
-        closePopover()
+        mainMenu?.cancelTracking()
         SettingsWindowController.shared.show()
     }
 
     @objc func openAbout() {
-        // Close the popover and show settings on About tab
-        closePopover()
+        mainMenu?.cancelTracking()
         SettingsWindowController.shared.show(tab: .about)
     }
 
     @objc func quitApp() {
         NSApp.terminate(nil)
-    }
-
-    private func showPopover(relativeTo button: NSStatusBarButton) {
-        guard let popover = popover else { return }
-        // Ensure correct appearance before showing
-        updatePopoverAppearance()
-
-        // Activate app BEFORE showing popover to ensure proper focus
-        NSApp.activate(ignoringOtherApps: true)
-
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        eventMonitor?.start()
-
-        // Make the popover's window key and first responder
-        if let window = popover.contentViewController?.view.window {
-            window.makeKey()
-            window.makeFirstResponder(popover.contentViewController?.view)
-        }
-    }
-
-    private func closePopover() {
-        popover?.performClose(nil)
-        eventMonitor?.stop()
-    }
-
-    @objc private func systemAppearanceChanged() {
-        // Small delay to ensure system appearance is updated
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.updatePopoverAppearance()
-        }
-    }
-
-    private func updatePopoverAppearance() {
-        // Use NSApp.effectiveAppearance which is the authoritative source
-        let appearance = NSApp.effectiveAppearance
-        popover?.appearance = appearance
-        popover?.contentViewController?.view.appearance = appearance
     }
 }
 
@@ -183,6 +90,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 extension Notification.Name {
     static let openSettings = Notification.Name("openSettings")
     static let showPRNotification = Notification.Name("showPRNotification")
+}
+
+// MARK: - Screen Detection Helper
+extension NSScreen {
+    /// Returns the screen containing the mouse cursor
+    static var screenWithMouse: NSScreen {
+        let mouseLocation = NSEvent.mouseLocation
+        // Find screen containing the mouse pointer
+        for screen in NSScreen.screens {
+            if screen.frame.contains(mouseLocation) {
+                return screen
+            }
+        }
+        // Fallback to main screen
+        return NSScreen.main ?? NSScreen.screens.first!
+    }
 }
 
 // MARK: - Full Screen PR Notification
@@ -219,14 +142,18 @@ class PRNotificationWindowController {
                 GitHubService.shared.startWatching(pr: pr)
                 self?.dismiss()
             },
+            onSnooze: { [weak self] pr, minutes in
+                // Snooze - will remind after X minutes
+                GitHubService.shared.snoozeNewPR(pr: pr, minutes: minutes)
+                self?.dismiss()
+            },
             onDismiss: { [weak self] in
                 self?.dismiss()
             }
         )
 
-        // Get the screen where the mouse is located, or main screen as fallback
-        let mouseLocation = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens.first!
+        // Get the screen where the mouse is located
+        let screen = NSScreen.screenWithMouse
         let screenFrame = screen.frame
 
         // Create borderless full-screen window
@@ -245,7 +172,7 @@ class PRNotificationWindowController {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.ignoresMouseEvents = false
 
-        // Set frame to cover the entire screen
+        // Set frame to cover the entire screen where mouse is
         window.setFrame(screenFrame, display: true)
 
         // Fade in
@@ -313,8 +240,7 @@ class PRNotificationWindowController {
         )
 
         // Get the screen where the mouse is located
-        let mouseLocation = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens.first!
+        let screen = NSScreen.screenWithMouse
         let screenFrame = screen.frame
 
         // Create borderless full-screen window
@@ -427,6 +353,7 @@ struct FullScreenPRNotificationView: View {
     let onOpen: (PullRequest) -> Void
     let onOpenWatched: (WatchedPR) -> Void
     let onReviewLater: ((PullRequest) -> Void)?
+    let onSnooze: ((PullRequest, Int) -> Void)?  // PR and minutes to snooze
     let onDismiss: () -> Void
     let onStopReminding: ((Int) -> Void)?
 
@@ -437,6 +364,7 @@ struct FullScreenPRNotificationView: View {
         onOpen: @escaping (PullRequest) -> Void = { _ in },
         onOpenWatched: @escaping (WatchedPR) -> Void = { _ in },
         onReviewLater: ((PullRequest) -> Void)? = nil,
+        onSnooze: ((PullRequest, Int) -> Void)? = nil,
         onDismiss: @escaping () -> Void,
         onStopReminding: ((Int) -> Void)? = nil
     ) {
@@ -446,6 +374,7 @@ struct FullScreenPRNotificationView: View {
         self.onOpen = onOpen
         self.onOpenWatched = onOpenWatched
         self.onReviewLater = onReviewLater
+        self.onSnooze = onSnooze
         self.onDismiss = onDismiss
         self.onStopReminding = onStopReminding
     }
@@ -456,12 +385,9 @@ struct FullScreenPRNotificationView: View {
 
     var body: some View {
         ZStack {
-            // Dark overlay background
+            // Dark overlay background (no tap to dismiss - use explicit button)
             Color.black.opacity(0.85)
                 .ignoresSafeArea()
-                .onTapGesture {
-                    onDismiss()
-                }
 
             // Center content
             VStack(spacing: 40) {
@@ -527,7 +453,7 @@ struct FullScreenPRNotificationView: View {
                     .keyboardShortcut(.escape)
 
                     if !isReminder && prs.count == 1, let pr = prs.first {
-                        // Open PR button (secondary)
+                        // Open PR button
                         Button(action: { onOpen(pr) }) {
                             Text("Open PR")
                                 .font(.headline)
@@ -539,15 +465,15 @@ struct FullScreenPRNotificationView: View {
                         }
                         .buttonStyle(.plain)
 
-                        // Review Later button (primary)
-                        if let onReviewLater = onReviewLater {
-                            Button(action: { onReviewLater(pr) }) {
-                                Text("Review Later")
+                        // Snooze 5 min button
+                        if let onSnooze = onSnooze {
+                            Button(action: { onSnooze(pr, 5) }) {
+                                Text("5 min")
                                     .font(.headline)
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 32)
                                     .padding(.vertical, 14)
-                                    .background(Color.blue)
+                                    .background(Color.orange)
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
                             .buttonStyle(.plain)
@@ -572,7 +498,7 @@ struct FullScreenPRNotificationView: View {
                 .padding(.top, 20)
 
                 // Hint
-                Text("Press Escape or click anywhere to dismiss")
+                Text("Press Escape or click Dismiss to close")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.4))
                     .padding(.top, 20)
