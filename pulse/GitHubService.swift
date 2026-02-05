@@ -382,10 +382,11 @@ class GitHubService {
     }
 
     func fetchAllPRs() async {
-        // Fetch both in parallel
+        // Fetch all three in parallel
         async let awaitingTask: () = fetchPendingPRs()
         async let involvedTask: () = fetchInvolvedPRs()
-        _ = await (awaitingTask, involvedTask)
+        async let myPRsTask: () = fetchMyPRs()
+        _ = await (awaitingTask, involvedTask, myPRsTask)
     }
     
     func fetchInvolvedPRs() async {
@@ -415,6 +416,315 @@ class GitHubService {
         involvedPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) }
         hasLoadedInvolved = true
         isLoadingInvolved = false
+    }
+
+    func fetchMyPRs() async {
+        guard personalAccessToken != nil, let username = currentUser?.login else { return }
+
+        isLoadingMyPRs = true
+
+        var allPRs: [PullRequest] = []
+
+        // Build query based on filter
+        var queryParts = ["type:pr", "author:\(username)"]
+
+        switch myPRsStateFilter {
+        case .open:
+            queryParts.append("state:open")
+        case .closed:
+            queryParts.append("state:closed")
+            queryParts.append("is:unmerged")
+        case .merged:
+            queryParts.append("is:merged")
+        case .all:
+            break  // No state filter
+        }
+
+        if monitorAllRepositories {
+            let query = queryParts.joined(separator: " ")
+            allPRs = await searchMyPRs(query: query)
+        } else if !monitoredRepositories.isEmpty {
+            for repo in monitoredRepositories {
+                var repoQuery = queryParts
+                repoQuery.append("repo:\(repo)")
+                let query = repoQuery.joined(separator: " ")
+                let prs = await searchMyPRs(query: query)
+                allPRs.append(contentsOf: prs)
+            }
+        } else {
+            isLoadingMyPRs = false
+            return
+        }
+
+        let sortedPRs = allPRs.sorted { $0.updatedDate > $1.updatedDate }
+
+        // Check for activity changes and send notifications (only after first load)
+        if hasLoadedMyPRs {
+            await checkMyPRsForActivityChanges(sortedPRs)
+        }
+
+        // Filter out dismissed PRs
+        myPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) }
+        hasLoadedMyPRs = true
+        isLoadingMyPRs = false
+    }
+
+    private func searchMyPRs(query: String) async -> [PullRequest] {
+        guard let token = personalAccessToken else { return [] }
+
+        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let urlString = "https://api.github.com/search/issues?q=\(encodedQuery)&sort=updated&order=desc&per_page=100"
+
+        guard let url = URL(string: urlString) else { return [] }
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let searchResponse = try JSONDecoder().decode(GitHubSearchResponse.self, from: data)
+
+            // Fetch full details for each PR (we need review info)
+            var detailedPRs: [PullRequest] = []
+            for item in searchResponse.items {
+                if let prDetails = await fetchPRDetails(owner: item.repositoryOwner, repo: item.repositoryName, number: item.number) {
+                    detailedPRs.append(prDetails)
+                }
+            }
+
+            return detailedPRs
+        } catch {
+            print("[Pulse] My PRs search error: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    private func checkMyPRsForActivityChanges(_ currentPRs: [PullRequest]) async {
+        var eventsToNotify: [(PullRequest, [MyPRNotificationEvent])] = []
+
+        for pr in currentPRs {
+            guard let owner = pr.base.repo?.fullName.components(separatedBy: "/").first,
+                  let repo = pr.base.repo?.name else { continue }
+
+            // Get current activity
+            let currentActivity = await fetchPRActivity(owner: owner, repo: repo, number: pr.number, pr: pr)
+
+            // Compare with stored activity
+            if let previousActivity = myPRsLastActivity[pr.id] {
+                let events = detectActivityChanges(previous: previousActivity, current: currentActivity, pr: pr)
+                if !events.isEmpty {
+                    eventsToNotify.append((pr, events))
+                }
+            }
+
+            // Update stored activity
+            myPRsLastActivity[pr.id] = currentActivity
+        }
+
+        // Send notifications based on settings
+        if !eventsToNotify.isEmpty {
+            await sendMyPRNotifications(events: eventsToNotify)
+        }
+    }
+
+    private func fetchPRActivity(owner: String, repo: String, number: Int, pr: PullRequest) async -> PRActivity {
+        // Get reviews
+        let reviews = await fetchPRReviews(owner: owner, repo: repo, number: number)
+
+        let approvalCount = reviews.filter { $0.state == "APPROVED" }.count
+        let changesRequestedCount = reviews.filter { $0.state == "CHANGES_REQUESTED" }.count
+        let reviewCount = reviews.filter { ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"].contains($0.state) }.count
+        let latestReview = reviews.sorted { ($0.submittedAt ?? "") > ($1.submittedAt ?? "") }.first
+
+        // Get comment count (issue comments, not review comments)
+        let commentCount = await fetchPRCommentCount(owner: owner, repo: repo, number: number)
+
+        // Check merge status
+        let isMerged = pr.state == "closed" && (pr.mergedAt != nil)
+        let mergedAt = pr.mergedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
+
+        // For now, we don't have easy access to conflicts or check status from search results
+        // These would require additional API calls - leave as placeholders
+        let hasConflicts = false
+        let checkStatus: String? = nil
+
+        return PRActivity(
+            commentCount: commentCount,
+            reviewCount: reviewCount,
+            approvalCount: approvalCount,
+            changesRequestedCount: changesRequestedCount,
+            latestReviewState: latestReview?.state,
+            isMerged: isMerged,
+            mergedAt: mergedAt,
+            hasConflicts: hasConflicts,
+            checkStatus: checkStatus
+        )
+    }
+
+    private func fetchPRReviews(owner: String, repo: String, number: Int) async -> [PRReviewResponse] {
+        guard let token = personalAccessToken else { return [] }
+
+        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/pulls/\(number)/reviews")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+                return []
+            }
+            return try JSONDecoder().decode([PRReviewResponse].self, from: data)
+        } catch {
+            return []
+        }
+    }
+
+    private func fetchPRCommentCount(owner: String, repo: String, number: Int) async -> Int {
+        guard let token = personalAccessToken else { return 0 }
+
+        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/issues/\(number)/comments")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+                return 0
+            }
+            let comments = try JSONDecoder().decode([PRComment].self, from: data)
+            return comments.count
+        } catch {
+            return 0
+        }
+    }
+
+    private func detectActivityChanges(previous: PRActivity, current: PRActivity, pr: PullRequest) -> [MyPRNotificationEvent] {
+        var events: [MyPRNotificationEvent] = []
+
+        // Check for new approval
+        if current.approvalCount > previous.approvalCount {
+            events.append(.approval(reviewer: "someone"))
+        }
+
+        // Check for changes requested
+        if current.changesRequestedCount > previous.changesRequestedCount {
+            events.append(.changesRequested(reviewer: "someone"))
+        }
+
+        // Check for new review comment
+        if current.reviewCount > previous.reviewCount &&
+           current.approvalCount == previous.approvalCount &&
+           current.changesRequestedCount == previous.changesRequestedCount {
+            events.append(.reviewComment(reviewer: "someone"))
+        }
+
+        // Check for new comment
+        if current.commentCount > previous.commentCount {
+            events.append(.comment(commenter: "someone"))
+        }
+
+        // Check for merge
+        if current.isMerged && !previous.isMerged {
+            events.append(.merged)
+        }
+
+        // Check for conflict (when we implement it)
+        if current.hasConflicts && !previous.hasConflicts {
+            events.append(.conflict)
+        }
+
+        // Check for CI status changes (when we implement it)
+        if let currentCheck = current.checkStatus, let previousCheck = previous.checkStatus {
+            if currentCheck == "failure" && previousCheck != "failure" {
+                events.append(.checkFailure)
+            } else if currentCheck == "success" && previousCheck != "success" {
+                events.append(.checkSuccess)
+            }
+        }
+
+        return events
+    }
+
+    private func sendMyPRNotifications(events: [(PullRequest, [MyPRNotificationEvent])]) async {
+        let settings = myPRNotificationSettings
+
+        for (pr, prEvents) in events {
+            for event in prEvents {
+                let shouldNotify: Bool
+                let title: String
+                let body: String
+
+                switch event {
+                case .approval(let reviewer):
+                    shouldNotify = settings.notifyOnApproval
+                    title = "PR Approved"
+                    body = "\(reviewer) approved #\(pr.number): \(pr.title)"
+                case .changesRequested(let reviewer):
+                    shouldNotify = settings.notifyOnChangesRequested
+                    title = "Changes Requested"
+                    body = "\(reviewer) requested changes on #\(pr.number): \(pr.title)"
+                case .reviewComment(let reviewer):
+                    shouldNotify = settings.notifyOnReviewComment
+                    title = "New Review Comment"
+                    body = "\(reviewer) commented on #\(pr.number): \(pr.title)"
+                case .comment(let commenter):
+                    shouldNotify = settings.notifyOnComment
+                    title = "New Comment"
+                    body = "\(commenter) commented on #\(pr.number): \(pr.title)"
+                case .checkFailure:
+                    shouldNotify = settings.notifyOnCheckFailure
+                    title = "CI Failed"
+                    body = "Checks failed on #\(pr.number): \(pr.title)"
+                case .checkSuccess:
+                    shouldNotify = settings.notifyOnCheckSuccess
+                    title = "CI Passed"
+                    body = "Checks passed on #\(pr.number): \(pr.title)"
+                case .mention:
+                    shouldNotify = settings.notifyOnMention
+                    title = "You were mentioned"
+                    body = "You were mentioned in #\(pr.number): \(pr.title)"
+                case .merged:
+                    shouldNotify = settings.notifyOnMerge
+                    title = "PR Merged"
+                    body = "#\(pr.number) was merged: \(pr.title)"
+                case .conflict:
+                    shouldNotify = settings.notifyOnConflict
+                    title = "Merge Conflict"
+                    body = "#\(pr.number) has conflicts: \(pr.title)"
+                }
+
+                if shouldNotify {
+                    await MainActor.run {
+                        sendSystemNotification(title: title, body: body, prURL: pr.htmlURL)
+                    }
+                }
+            }
+        }
+    }
+
+    private func sendSystemNotification(title: String, body: String, prURL: String) {
+        let center = UNUserNotificationCenter.current()
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.userInfo = ["prURL": prURL]
+
+        let request = UNNotificationRequest(
+            identifier: "mypr-\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+
+        center.add(request) { error in
+            if let error = error {
+                print("[Pulse] My PR notification error: \(error.localizedDescription)")
+            }
+        }
     }
 
     func fetchRepositories() async {
@@ -959,25 +1269,27 @@ struct PullRequest: Codable, Identifiable {
     let additions: Int?
     let deletions: Int?
     let changedFiles: Int?
-    
+    let mergedAt: String?
+
     var repository: String {
         base.repo?.fullName ?? "unknown"
     }
-    
+
     var createdDate: Date {
         ISO8601DateFormatter().date(from: createdAt) ?? Date()
     }
-    
+
     var updatedDate: Date {
         ISO8601DateFormatter().date(from: updatedAt) ?? Date()
     }
-    
+
     enum CodingKeys: String, CodingKey {
         case id, number, title, body, state, user, draft, head, base, additions, deletions
         case htmlURL = "html_url"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case changedFiles = "changed_files"
+        case mergedAt = "merged_at"
     }
 }
 
@@ -1027,6 +1339,18 @@ struct PRReviewResponse: Codable {
     enum CodingKeys: String, CodingKey {
         case id, user, state
         case submittedAt = "submitted_at"
+    }
+}
+
+struct PRComment: Codable {
+    let id: Int
+    let user: PRUser
+    let body: String
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, user, body
+        case createdAt = "created_at"
     }
 }
 
