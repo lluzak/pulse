@@ -33,10 +33,27 @@ class GitHubService {
     var isLoadingInvolved: Bool = false
     var hasLoadedAwaiting: Bool = false
     var hasLoadedInvolved: Bool = false
+
+    // My PRs tab
+    var myPRs: [PullRequest] = []
+    var isLoadingMyPRs: Bool = false
+    var hasLoadedMyPRs: Bool = false
+    var myPRsStateFilter: PRStateFilter = .open
+
+    // Activity tracking for My PRs notifications
+    var myPRsLastActivity: [Int: PRActivity] = [:] {
+        didSet { saveMyPRsActivity() }
+    }
+
+    // My PRs notification settings
+    var myPRNotificationSettings: MyPRNotificationSettings = MyPRNotificationSettings() {
+        didSet { saveMyPRNotificationSettings() }
+    }
+
     var errorMessage: String?
 
-    var isLoading: Bool { isLoadingAwaiting || isLoadingInvolved }
-    var hasLoadedOnce: Bool { hasLoadedAwaiting || hasLoadedInvolved }
+    var isLoading: Bool { isLoadingAwaiting || isLoadingInvolved || isLoadingMyPRs }
+    var hasLoadedOnce: Bool { hasLoadedAwaiting || hasLoadedInvolved || hasLoadedMyPRs }
     
     // Repository filtering
     var monitoredRepositories: Set<String> = [] {
@@ -138,6 +155,8 @@ class GitHubService {
             dismissedPRIds = Set(dismissed)
         }
         loadWatchedPRs()
+        loadMyPRsActivity()
+        loadMyPRNotificationSettings()
     }
 
     func resetLoadedState() {
@@ -254,8 +273,10 @@ class GitHubService {
         currentUser = nil
         awaitingReviewPRs = []
         involvedPRs = []
+        myPRs = []
         hasLoadedAwaiting = false
         hasLoadedInvolved = false
+        hasLoadedMyPRs = false
         previousPRIds = []
         pollingTask?.cancel()
         KeychainHelper.delete(key: tokenKey)
@@ -460,6 +481,32 @@ class GitHubService {
             if !prs.isEmpty && isReminderEnabled {
                 startReminderPolling()
             }
+        }
+    }
+
+    private func saveMyPRsActivity() {
+        if let data = try? JSONEncoder().encode(myPRsLastActivity) {
+            UserDefaults.standard.set(data, forKey: "myPRsLastActivity")
+        }
+    }
+
+    private func loadMyPRsActivity() {
+        if let data = UserDefaults.standard.data(forKey: "myPRsLastActivity"),
+           let activity = try? JSONDecoder().decode([Int: PRActivity].self, from: data) {
+            myPRsLastActivity = activity
+        }
+    }
+
+    private func saveMyPRNotificationSettings() {
+        if let data = try? JSONEncoder().encode(myPRNotificationSettings) {
+            UserDefaults.standard.set(data, forKey: "myPRNotificationSettings")
+        }
+    }
+
+    private func loadMyPRNotificationSettings() {
+        if let data = UserDefaults.standard.data(forKey: "myPRNotificationSettings"),
+           let settings = try? JSONDecoder().decode(MyPRNotificationSettings.self, from: data) {
+            myPRNotificationSettings = settings
         }
     }
 
