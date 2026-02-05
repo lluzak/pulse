@@ -34,7 +34,8 @@ struct pulseApp: App {
 }
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var mainMenu: NSMenu?
+    private var popover: NSPopover?
+    private var eventMonitor: EventMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize GitHubService early to start fetching data at launch
@@ -45,24 +46,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "waveform.path.ecg", accessibilityDescription: "Pulse")
-            button.image?.isTemplate = true // Adapts to menu bar appearance
+            button.image?.isTemplate = true
+            button.action = #selector(togglePopover)
+            button.target = self
         }
 
-        // Create the menu with SwiftUI content only
-        let menu = NSMenu()
-        let contentItem = NSMenuItem()
-        let hostingView = NSHostingView(rootView: MenuBarView())
-        hostingView.frame = NSRect(x: 0, y: 0, width: 400, height: 550)
-        contentItem.view = hostingView
-        menu.addItem(contentItem)
+        // Create the popover
+        let popover = NSPopover()
+        popover.contentSize = NSSize(width: 400, height: 550)
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: MenuBarView())
+        self.popover = popover
 
-        statusItem?.menu = menu
-        self.mainMenu = menu
+        // Sync popover appearance with system theme
+        updatePopoverAppearance()
+
+        // Observe system appearance changes
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(systemAppearanceChanged),
+            name: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil
+        )
+
+        // Monitor for clicks outside the popover
+        eventMonitor = EventMonitor(mask: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            if let popover = self?.popover, popover.isShown {
+                self?.closePopover()
+            }
+        }
 
         // Hide the dock icon
         NSApp.setActivationPolicy(.accessory)
 
-        // Listen for settings notification from the gear button in menu
+        // Listen for settings notification from the gear button in popover
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(openSettings),
@@ -71,13 +88,52 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    @objc func togglePopover() {
+        guard let button = statusItem?.button else { return }
+
+        if let popover = popover {
+            if popover.isShown {
+                closePopover()
+            } else {
+                showPopover(relativeTo: button)
+            }
+        }
+    }
+
+    private func showPopover(relativeTo button: NSStatusBarButton) {
+        guard let popover = popover else { return }
+        updatePopoverAppearance()
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        eventMonitor?.start()
+
+        // Focus the popover window to enable keyboard input
+        if let popoverWindow = popover.contentViewController?.view.window {
+            popoverWindow.makeKey()
+        }
+    }
+
+    private func closePopover() {
+        popover?.performClose(nil)
+        eventMonitor?.stop()
+    }
+
+    @objc func systemAppearanceChanged() {
+        updatePopoverAppearance()
+    }
+
+    private func updatePopoverAppearance() {
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        popover?.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
+    }
+
     @objc func openSettings() {
-        mainMenu?.cancelTracking()
+        closePopover()
         SettingsWindowController.shared.show()
     }
 
     @objc func openAbout() {
-        mainMenu?.cancelTracking()
+        closePopover()
         SettingsWindowController.shared.show(tab: .about)
     }
 

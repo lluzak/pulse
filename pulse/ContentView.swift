@@ -45,6 +45,7 @@ struct GitHubAuthView: View {
     @Bindable var gitHubService: GitHubService
     @State private var tokenInput: String = ""
     @State private var isAuthenticating: Bool = false
+    @State private var showToken: Bool = false
     
     var body: some View {
         VStack(spacing: 24) {
@@ -71,9 +72,24 @@ struct GitHubAuthView: View {
                     .font(.headline)
                     .foregroundStyle(.secondary)
                 
-                SecureField("Enter your GitHub token", text: $tokenInput)
-                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    if showToken {
+                        TextField("Enter your GitHub token", text: $tokenInput)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(isAuthenticating)
+                    } else {
+                        SecureField("Enter your GitHub token", text: $tokenInput)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(isAuthenticating)
+                    }
+
+                    Button(action: { showToken.toggle() }) {
+                        Image(systemName: showToken ? "eye.slash" : "eye")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                     .disabled(isAuthenticating)
+                }
                 
                 Button(action: authenticate) {
                     HStack {
