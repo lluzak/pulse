@@ -1205,10 +1205,10 @@ struct PRRowView: View {
                 .foregroundStyle(.secondary)
             }
             .padding(12)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(isHovered ? Color.primary.opacity(0.06) : Color.clear)
-        .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering
             if hovering {
