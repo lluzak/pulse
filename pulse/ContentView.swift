@@ -147,6 +147,7 @@ struct PRListView: View {
     enum PRTab: String, CaseIterable {
         case awaitingReview = "Awaiting Review"
         case involved = "Involved"
+        case myPRs = "My PRs"
     }
 
     var body: some View {
@@ -251,14 +252,33 @@ struct PRListView: View {
         }
     }
 
+    private var currentIsLoading: Bool {
+        switch selectedTab {
+        case .awaitingReview: return gitHubService.isLoadingAwaiting
+        case .involved: return gitHubService.isLoadingInvolved
+        case .myPRs: return gitHubService.isLoadingMyPRs
+        }
+    }
+
+    private var currentHasLoaded: Bool {
+        switch selectedTab {
+        case .awaitingReview: return gitHubService.hasLoadedAwaiting
+        case .involved: return gitHubService.hasLoadedInvolved
+        case .myPRs: return gitHubService.hasLoadedMyPRs
+        }
+    }
+
+    private var currentPRs: [PullRequest] {
+        switch selectedTab {
+        case .awaitingReview: return gitHubService.awaitingReviewPRs
+        case .involved: return gitHubService.involvedPRs
+        case .myPRs: return gitHubService.myPRs
+        }
+    }
+
     @ViewBuilder
     private var tabContent: some View {
-        let isLoading = selectedTab == .awaitingReview ? gitHubService.isLoadingAwaiting : gitHubService.isLoadingInvolved
-        let hasLoaded = selectedTab == .awaitingReview ? gitHubService.hasLoadedAwaiting : gitHubService.hasLoadedInvolved
-        let prs = selectedTab == .awaitingReview ? gitHubService.awaitingReviewPRs : gitHubService.involvedPRs
-
-        if !hasLoaded {
-            // Haven't loaded yet - show loading state
+        if !currentHasLoaded {
             VStack(spacing: 12) {
                 ProgressView()
                 Text("Loading PRs...")
@@ -266,10 +286,9 @@ struct PRListView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxHeight: .infinity)
-        } else if prs.isEmpty {
-            // Loaded but no PRs
+        } else if currentPRs.isEmpty {
             VStack(spacing: 12) {
-                if isLoading {
+                if currentIsLoading {
                     ProgressView()
                         .padding(.bottom, 8)
                 }
@@ -286,33 +305,70 @@ struct PRListView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
                 } else {
-                    Image(systemName: selectedTab == .awaitingReview ? "checkmark.circle.fill" : "tray")
+                    Image(systemName: emptyStateIcon)
                         .font(.system(size: 48))
-                        .foregroundStyle(selectedTab == .awaitingReview ? .green : .gray)
+                        .foregroundStyle(emptyStateColor)
 
-                    Text(selectedTab == .awaitingReview ? "All caught up!" : "No PRs")
+                    Text(emptyStateTitle)
                         .font(.headline)
 
-                    Text(selectedTab == .awaitingReview ? "No PRs awaiting your review" : "No PRs you're involved with")
+                    Text(emptyStateSubtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
             .frame(maxHeight: .infinity)
         } else {
-            // Have PRs to display
-            ScrollView {
-                if isLoading {
-                    ProgressView()
-                        .padding(8)
+            VStack(spacing: 0) {
+                if selectedTab == .myPRs {
+                    MyPRsFilterBar(gitHubService: gitHubService)
                 }
-                LazyVStack(spacing: 0) {
-                    ForEach(prs) { pr in
-                        PRRowView(pr: pr, gitHubService: gitHubService)
-                        Divider()
+
+                ScrollView {
+                    if currentIsLoading {
+                        ProgressView()
+                            .padding(8)
+                    }
+                    LazyVStack(spacing: 0) {
+                        ForEach(currentPRs) { pr in
+                            PRRowView(pr: pr, gitHubService: gitHubService, showReviewStatus: selectedTab == .myPRs)
+                            Divider()
+                        }
                     }
                 }
             }
+        }
+    }
+
+    private var emptyStateIcon: String {
+        switch selectedTab {
+        case .awaitingReview: return "checkmark.circle.fill"
+        case .involved: return "tray"
+        case .myPRs: return "doc.text"
+        }
+    }
+
+    private var emptyStateColor: Color {
+        switch selectedTab {
+        case .awaitingReview: return .green
+        case .involved: return .gray
+        case .myPRs: return .gray
+        }
+    }
+
+    private var emptyStateTitle: String {
+        switch selectedTab {
+        case .awaitingReview: return "All caught up!"
+        case .involved: return "No PRs"
+        case .myPRs: return "No PRs"
+        }
+    }
+
+    private var emptyStateSubtitle: String {
+        switch selectedTab {
+        case .awaitingReview: return "No PRs awaiting your review"
+        case .involved: return "No PRs you're involved with"
+        case .myPRs: return "You haven't created any PRs"
         }
     }
 
@@ -327,7 +383,37 @@ struct PRListView: View {
             return gitHubService.awaitingReviewPRs.count
         case .involved:
             return gitHubService.involvedPRs.count
+        case .myPRs:
+            return gitHubService.myPRs.count
         }
+    }
+}
+
+// MARK: - My PRs Filter Bar
+
+struct MyPRsFilterBar: View {
+    @Bindable var gitHubService: GitHubService
+
+    var body: some View {
+        HStack {
+            Text("Show:")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("", selection: $gitHubService.myPRsStateFilter) {
+                ForEach(PRStateFilter.allCases, id: \.self) { filter in
+                    Text(filter.rawValue).tag(filter)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .onChange(of: gitHubService.myPRsStateFilter) { _, _ in
+                Task { await gitHubService.fetchMyPRs() }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.primary.opacity(0.03))
     }
 }
 
@@ -875,9 +961,42 @@ struct AboutTabView: View {
     }
 }
 
+// MARK: - Review Status Badge
+
+struct ReviewStatusBadge: View {
+    let summary: PRReviewSummary
+
+    private var statusColor: Color {
+        if summary.changesRequestedCount > 0 {
+            return .red
+        } else if summary.approvedCount > 0 {
+            return .green
+        } else if summary.commentedCount > 0 {
+            return .yellow
+        }
+        return .gray
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 6, height: 6)
+            Text(summary.displayText)
+                .font(.caption2)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(statusColor.opacity(0.15))
+        .clipShape(Capsule())
+    }
+}
+
 struct PRRowView: View {
     let pr: PullRequest
     let gitHubService: GitHubService
+    var showReviewStatus: Bool = false
+    @State private var reviewSummary: PRReviewSummary?
     @State private var isHovered = false
     @State private var now = Date()
 
@@ -944,6 +1063,11 @@ struct PRRowView: View {
 
                     Spacer()
 
+                    // Show review status for My PRs tab
+                    if showReviewStatus, let summary = reviewSummary {
+                        ReviewStatusBadge(summary: summary)
+                    }
+
                     // Show reminder countdown if watching
                     if let countdown = countdownText {
                         HStack(spacing: 3) {
@@ -968,6 +1092,27 @@ struct PRRowView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color(nsColor: .quaternaryLabelColor))
+                            .clipShape(Capsule())
+                    }
+
+                    // Show merged badge
+                    if pr.mergedAt != nil {
+                        Text("MERGED")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.purple)
+                            .clipShape(Capsule())
+                    } else if pr.state == "closed" {
+                        Text("CLOSED")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.red)
                             .clipShape(Capsule())
                     }
                 }
@@ -1021,6 +1166,11 @@ struct PRRowView: View {
         .onReceive(timer) { _ in
             now = Date()
         }
+        .task {
+            if showReviewStatus {
+                await loadReviewSummary()
+            }
+        }
         .contextMenu {
             Button(action: {
                 gitHubService.openPRInBrowser(pr)
@@ -1044,6 +1194,13 @@ struct PRRowView: View {
                 Label("Dismiss PR", systemImage: "xmark.circle")
             }
         }
+    }
+
+    private func loadReviewSummary() async {
+        guard let owner = pr.base.repo?.fullName.components(separatedBy: "/").first,
+              let repo = pr.base.repo?.name else { return }
+
+        reviewSummary = await gitHubService.fetchPRReviewSummary(owner: owner, repo: repo, number: pr.number)
     }
 }
 

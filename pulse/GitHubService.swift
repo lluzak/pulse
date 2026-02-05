@@ -601,6 +601,29 @@ class GitHubService {
         }
     }
 
+    func fetchPRReviewSummary(owner: String, repo: String, number: Int) async -> PRReviewSummary {
+        let reviews = await fetchPRReviews(owner: owner, repo: repo, number: number)
+
+        // Group by user and get their latest review
+        var latestByUser: [String: PRReviewResponse] = [:]
+        for review in reviews.sorted(by: { ($0.submittedAt ?? "") < ($1.submittedAt ?? "") }) {
+            if ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"].contains(review.state) {
+                latestByUser[review.user.login] = review
+            }
+        }
+
+        let approvedCount = latestByUser.values.filter { $0.state == "APPROVED" }.count
+        let changesRequestedCount = latestByUser.values.filter { $0.state == "CHANGES_REQUESTED" }.count
+        let commentedCount = latestByUser.values.filter { $0.state == "COMMENTED" }.count
+
+        return PRReviewSummary(
+            approvedCount: approvedCount,
+            changesRequestedCount: changesRequestedCount,
+            commentedCount: commentedCount,
+            pendingCount: 0
+        )
+    }
+
     private func detectActivityChanges(previous: PRActivity, current: PRActivity, pr: PullRequest) -> [MyPRNotificationEvent] {
         var events: [MyPRNotificationEvent] = []
 
@@ -1417,6 +1440,28 @@ struct PRActivity: Codable, Equatable {
     let mergedAt: Date?
     let hasConflicts: Bool
     let checkStatus: String?  // success, failure, pending
+}
+
+// MARK: - PR Review Summary (for My PRs tab)
+
+struct PRReviewSummary {
+    let approvedCount: Int
+    let changesRequestedCount: Int
+    let commentedCount: Int
+    let pendingCount: Int
+
+    var displayText: String {
+        if approvedCount > 0 && changesRequestedCount == 0 {
+            return "\(approvedCount) approved"
+        } else if changesRequestedCount > 0 {
+            return "\(changesRequestedCount) changes"
+        } else if commentedCount > 0 {
+            return "\(commentedCount) comments"
+        } else if pendingCount > 0 {
+            return "\(pendingCount) pending"
+        }
+        return "No reviews"
+    }
 }
 
 // MARK: - My PR Notification Event Types
