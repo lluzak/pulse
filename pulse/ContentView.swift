@@ -461,19 +461,17 @@ struct MyPRsFilterBar: View {
     @Bindable var gitHubService: GitHubService
 
     var body: some View {
-        HStack {
-            Picker("", selection: $gitHubService.myPRsStateFilter) {
-                ForEach(PRStateFilter.allCases, id: \.self) { filter in
-                    Text(filter.rawValue).tag(filter)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
-            .onChange(of: gitHubService.myPRsStateFilter) { _, _ in
-                Task { await gitHubService.fetchMyPRs() }
+        Picker("", selection: $gitHubService.myPRsStateFilter) {
+            ForEach(PRStateFilter.allCases, id: \.self) { filter in
+                Text(filter.rawValue).tag(filter)
             }
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .onChange(of: gitHubService.myPRsStateFilter) { _, _ in
+            Task { await gitHubService.fetchMyPRs() }
+        }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.primary.opacity(0.03))
