@@ -76,6 +76,7 @@ playground.xcworkspace
 *.pem
 *.p12
 *.mobileprovision
+Secrets.swift
 
 # Logs
 *.log

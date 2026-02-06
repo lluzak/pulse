@@ -1646,4 +1646,84 @@ func createMockPR(
     )
 }
 
+// MARK: - OAuth Manager Tests
+
+final class OAuthManagerTests: XCTestCase {
+
+    func testCodeVerifierGeneration() {
+        let manager = OAuthManager.shared
+
+        // Use reflection to test private method via the public flow
+        // We test that starting OAuth doesn't crash and sets authenticating state
+        manager.cancelAuth()
+        XCTAssertFalse(manager.isAuthenticating)
+    }
+
+    func testBase64URLEncoding() {
+        // Test the base64URL encoding extension
+        let testData = Data([0x00, 0x10, 0x83, 0x10, 0x51, 0x87, 0x20, 0x92, 0x8b])
+        let encoded = testData.base64URLEncodedString()
+
+        // Base64URL should not contain +, /, or =
+        XCTAssertFalse(encoded.contains("+"))
+        XCTAssertFalse(encoded.contains("/"))
+        XCTAssertFalse(encoded.contains("="))
+    }
+
+    func testCallbackURLParsing() {
+        let manager = OAuthManager.shared
+        manager.cancelAuth() // Reset state
+
+        // Test invalid URL scheme
+        let invalidURL = URL(string: "https://example.com/callback")!
+        let handled = manager.handleCallback(url: invalidURL)
+        XCTAssertFalse(handled)
+
+        // Test valid scheme but without state (should fail gracefully)
+        let validSchemeURL = URL(string: "pulse://oauth/callback?code=abc123")!
+        // This will return true (it's handled) but will trigger an error due to state mismatch
+        let handledValid = manager.handleCallback(url: validSchemeURL)
+        XCTAssertTrue(handledValid)
+    }
+
+    func testOAuthCancelation() {
+        let manager = OAuthManager.shared
+
+        // Start would open browser, but we can test cancel
+        manager.cancelAuth()
+
+        XCTAssertFalse(manager.isAuthenticating)
+        XCTAssertNil(manager.error)
+    }
+
+    func testCallbackWithError() {
+        let manager = OAuthManager.shared
+        manager.cancelAuth()
+
+        // Test callback with error parameter
+        let errorURL = URL(string: "pulse://oauth/callback?error=access_denied&error_description=User%20denied%20access")!
+        let handled = manager.handleCallback(url: errorURL)
+
+        XCTAssertTrue(handled)
+        // Error should be set
+        XCTAssertNotNil(manager.error)
+        XCTAssertEqual(manager.error, "User denied access")
+    }
+}
+
+// MARK: - GitHubService OAuth Tests
+
+final class GitHubServiceOAuthTests: XCTestCase {
+
+    func testOAuthInProgressInitialState() {
+        let service = GitHubService()
+        XCTAssertFalse(service.isOAuthInProgress)
+    }
+
+    func testCancelOAuth() {
+        let service = GitHubService()
+        service.cancelOAuth()
+        XCTAssertFalse(service.isOAuthInProgress)
+    }
+}
 

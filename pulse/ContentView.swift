@@ -46,67 +46,115 @@ struct GitHubAuthView: View {
     @State private var tokenInput: String = ""
     @State private var isAuthenticating: Bool = false
     @State private var showToken: Bool = false
-    
+    @State private var showTokenInput: Bool = false
+
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
-            
+
             VStack(spacing: 12) {
                 Image(systemName: "person.badge.key.fill")
                     .font(.system(size: 60))
                     .foregroundStyle(.blue)
-                
+
                 Text("Connect to GitHub")
                     .font(.title2)
                     .fontWeight(.bold)
-                
+
                 Text("Sign in to view your pending PRs")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            
-            Spacer()
-            
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Personal Access Token")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                
-                HStack {
-                    if showToken {
-                        TextField("Enter your GitHub token", text: $tokenInput)
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(isAuthenticating)
-                    } else {
-                        SecureField("Enter your GitHub token", text: $tokenInput)
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(isAuthenticating)
-                    }
 
-                    Button(action: { showToken.toggle() }) {
-                        Image(systemName: showToken ? "eye.slash" : "eye")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isAuthenticating)
-                }
-                
-                Button(action: authenticate) {
+            Spacer()
+
+            VStack(spacing: 16) {
+                // Primary: OAuth Sign In
+                Button(action: startOAuth) {
                     HStack {
-                        if isAuthenticating {
+                        if gitHubService.isOAuthInProgress {
                             ProgressView()
                                 .scaleEffect(0.7)
                                 .frame(width: 16, height: 16)
+                            Text("Waiting for GitHub...")
                         } else {
-                            Image(systemName: "key.fill")
+                            Image(systemName: "arrow.right.circle.fill")
+                            Text("Sign in with GitHub")
                         }
-                        Text(isAuthenticating ? "Authenticating..." : "Sign In")
                     }
                     .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(tokenInput.isEmpty || isAuthenticating)
-                
+                .disabled(gitHubService.isOAuthInProgress || isAuthenticating)
+
+                if gitHubService.isOAuthInProgress {
+                    Button("Cancel") {
+                        gitHubService.cancelOAuth()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+
+                // Secondary: Token fallback
+                Button(action: { withAnimation { showTokenInput.toggle() } }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: showTokenInput ? "chevron.down" : "chevron.right")
+                            .font(.caption2)
+                        Text("Use personal access token")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(gitHubService.isOAuthInProgress)
+
+                if showTokenInput {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            if showToken {
+                                TextField("Enter your GitHub token", text: $tokenInput)
+                                    .textFieldStyle(.roundedBorder)
+                                    .disabled(isAuthenticating)
+                            } else {
+                                SecureField("Enter your GitHub token", text: $tokenInput)
+                                    .textFieldStyle(.roundedBorder)
+                                    .disabled(isAuthenticating)
+                            }
+
+                            Button(action: { showToken.toggle() }) {
+                                Image(systemName: showToken ? "eye.slash" : "eye")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isAuthenticating)
+                        }
+
+                        Button(action: authenticateWithToken) {
+                            HStack {
+                                if isAuthenticating {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                        .frame(width: 16, height: 16)
+                                } else {
+                                    Image(systemName: "key.fill")
+                                }
+                                Text(isAuthenticating ? "Authenticating..." : "Sign In with Token")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(tokenInput.isEmpty || isAuthenticating)
+
+                        Button("How to get a token") {
+                            NSWorkspace.shared.open(URL(string: "https://github.com/settings/tokens")!)
+                        }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                    }
+                    .padding(.top, 8)
+                }
+
                 if let error = gitHubService.errorMessage {
                     Text(error)
                         .font(.caption)
@@ -115,35 +163,19 @@ struct GitHubAuthView: View {
                 }
             }
             .padding(.horizontal, 32)
-            
+
             Spacer()
-            
-            VStack(spacing: 8) {
-                Text("How to get a token:")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("1. Go to GitHub Settings → Developer settings")
-                    Text("2. Select Personal access tokens → Fine-grained")
-                    Text("3. Generate new token with repo access")
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                
-                Button("Open GitHub Settings") {
-                    NSWorkspace.shared.open(URL(string: "https://github.com/settings/tokens")!)
-                }
-                .buttonStyle(.link)
-                .font(.caption)
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 24)
         }
     }
-    
-    private func authenticate() {
+
+    private func startOAuth() {
+        gitHubService.errorMessage = nil
+        gitHubService.startOAuthFlow()
+    }
+
+    private func authenticateWithToken() {
         isAuthenticating = true
+        gitHubService.errorMessage = nil
         Task {
             await gitHubService.authenticate(token: tokenInput)
             isAuthenticating = false

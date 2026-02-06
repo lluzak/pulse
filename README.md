@@ -45,6 +45,11 @@ Download the latest `.dmg` from [Releases](../../releases).
 git clone https://github.com/lluzak/pulse.git
 cd pulse
 
+# Set up OAuth credentials (required for GitHub sign-in)
+cp pulse/Secrets.swift.template pulse/Secrets.swift
+# Edit pulse/Secrets.swift with your GitHub OAuth App credentials
+# Get them from: https://github.com/settings/developers
+
 # Build and run
 ./run.sh
 
@@ -55,12 +60,12 @@ cd pulse
 ## Setup
 
 1. Click the Pulse icon in your menu bar
-2. Generate a GitHub Personal Access Token:
-   - Go to [GitHub Settings > Developer settings > Personal access tokens](https://github.com/settings/tokens)
-   - Click "Generate new token (classic)"
-   - Select scope: `repo` (for private repos) or `public_repo` (for public only)
-   - Copy the generated token
-3. Paste the token in Pulse and click "Sign In"
+2. Click "Sign in with GitHub" and authorize the app
+
+**Alternative:** Use a Personal Access Token
+- Click "Use personal access token"
+- Generate a token at [GitHub Settings](https://github.com/settings/tokens) with `repo` scope
+- Paste the token and click "Sign In"
 
 ## Screenshots
 

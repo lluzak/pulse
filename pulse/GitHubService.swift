@@ -259,12 +259,39 @@ class GitHubService {
     }
     
     // MARK: - Authentication
-    
+
+    /// Authenticate with a personal access token
     func authenticate(token: String) async {
         self.personalAccessToken = token
         await fetchCurrentUser()
         // Start polling after successful authentication
         startPolling()
+    }
+
+    /// Start OAuth flow - opens browser for GitHub authorization
+    func startOAuthFlow() {
+        // Set up callbacks
+        OAuthManager.shared.onAuthSuccess = { [weak self] token in
+            Task {
+                await self?.authenticate(token: token)
+            }
+        }
+        OAuthManager.shared.onAuthFailure = { [weak self] error in
+            self?.errorMessage = error
+        }
+
+        // Start the flow
+        OAuthManager.shared.startOAuthFlow()
+    }
+
+    /// Check if OAuth is in progress
+    var isOAuthInProgress: Bool {
+        OAuthManager.shared.isAuthenticating
+    }
+
+    /// Cancel ongoing OAuth flow
+    func cancelOAuth() {
+        OAuthManager.shared.cancelAuth()
     }
     
     func signOut() {

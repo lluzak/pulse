@@ -140,6 +140,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func quitApp() {
         NSApp.terminate(nil)
     }
+
+    // MARK: - OAuth URL Handling
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            if OAuthManager.shared.handleCallback(url: url) {
+                // Bring app to front after OAuth callback
+                NSApp.activate(ignoringOtherApps: true)
+                // Show popover
+                if let button = statusItem?.button {
+                    showPopover(relativeTo: button)
+                }
+                break
+            }
+        }
+    }
 }
 
 // MARK: - Notification Names
