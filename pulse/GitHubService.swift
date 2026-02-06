@@ -38,7 +38,18 @@ class GitHubService {
     var myPRs: [PullRequest] = []
     var isLoadingMyPRs: Bool = false
     var hasLoadedMyPRs: Bool = false
-    var myPRsStateFilter: PRStateFilter = .open
+    var myPRsStateFilter: PRStateFilter = .open {
+        didSet {
+            // Reset pagination when filter changes
+            myPRsCurrentPage = 1
+            myPRsHasMore = true
+        }
+    }
+    var myPRsCurrentPage: Int = 1
+    var myPRsHasMore: Bool = true
+    var isLoadingMoreMyPRs: Bool = false
+    var myOpenPRsCount: Int = 0
+    private let myPRsPerPage = 20
 
     // Activity tracking for My PRs notifications
     var myPRsLastActivity: [Int: PRActivity] = [:] {
@@ -449,10 +460,83 @@ class GitHubService {
         guard personalAccessToken != nil, let username = currentUser?.login else { return }
 
         isLoadingMyPRs = true
+        // Reset pagination for fresh fetch
+        myPRsCurrentPage = 1
+        myPRsHasMore = true
 
-        var allPRs: [PullRequest] = []
+        // Always fetch open PR count for tab badge
+        async let openCountTask = fetchMyOpenPRsCount(username: username)
 
-        // Build query based on filter
+        let query = buildMyPRsQuery(username: username)
+        let fetchedPRs = await searchMyPRs(query: query, page: 1)
+
+        let sortedPRs = fetchedPRs.sorted { $0.updatedDate > $1.updatedDate }
+
+        // Check for activity changes and send notifications (only after first load)
+        if hasLoadedMyPRs {
+            await checkMyPRsForActivityChanges(sortedPRs)
+        }
+
+        // Filter out dismissed PRs
+        myPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) }
+
+        // Update open count
+        myOpenPRsCount = await openCountTask
+
+        hasLoadedMyPRs = true
+        isLoadingMyPRs = false
+
+        // Update hasMore based on results
+        myPRsHasMore = sortedPRs.count >= myPRsPerPage
+    }
+
+    private func fetchMyOpenPRsCount(username: String) async -> Int {
+        guard let token = personalAccessToken else { return 0 }
+
+        let query = "type:pr author:\(username) state:open"
+        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let urlString = "https://api.github.com/search/issues?q=\(encodedQuery)&per_page=1"
+
+        guard let url = URL(string: urlString) else { return 0 }
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let searchResponse = try JSONDecoder().decode(GitHubSearchResponse.self, from: data)
+            return searchResponse.totalCount
+        } catch {
+            print("[Pulse] Open PR count fetch error: \(error.localizedDescription)")
+            return 0
+        }
+    }
+
+    func loadMoreMyPRs() async {
+        guard !isLoadingMoreMyPRs,
+              myPRsHasMore,
+              let username = currentUser?.login else { return }
+
+        isLoadingMoreMyPRs = true
+        myPRsCurrentPage += 1
+
+        let query = buildMyPRsQuery(username: username)
+        let newPRs = await searchMyPRs(query: query, page: myPRsCurrentPage)
+
+        // Filter out dismissed and already loaded PRs
+        let existingIds = Set(myPRs.map { $0.id })
+        let filteredNewPRs = newPRs.filter { !dismissedPRIds.contains($0.id) && !existingIds.contains($0.id) }
+
+        myPRs.append(contentsOf: filteredNewPRs)
+        myPRs.sort { $0.updatedDate > $1.updatedDate }
+
+        // Update hasMore based on results
+        myPRsHasMore = newPRs.count >= myPRsPerPage
+        isLoadingMoreMyPRs = false
+    }
+
+    private func buildMyPRsQuery(username: String) -> String {
         var queryParts = ["type:pr", "author:\(username)"]
 
         switch myPRsStateFilter {
@@ -464,43 +548,17 @@ class GitHubService {
         case .merged:
             queryParts.append("is:merged")
         case .all:
-            break  // No state filter
+            break
         }
 
-        if monitorAllRepositories {
-            let query = queryParts.joined(separator: " ")
-            allPRs = await searchMyPRs(query: query)
-        } else if !monitoredRepositories.isEmpty {
-            for repo in monitoredRepositories {
-                var repoQuery = queryParts
-                repoQuery.append("repo:\(repo)")
-                let query = repoQuery.joined(separator: " ")
-                let prs = await searchMyPRs(query: query)
-                allPRs.append(contentsOf: prs)
-            }
-        } else {
-            isLoadingMyPRs = false
-            return
-        }
-
-        let sortedPRs = allPRs.sorted { $0.updatedDate > $1.updatedDate }
-
-        // Check for activity changes and send notifications (only after first load)
-        if hasLoadedMyPRs {
-            await checkMyPRsForActivityChanges(sortedPRs)
-        }
-
-        // Filter out dismissed PRs
-        myPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) }
-        hasLoadedMyPRs = true
-        isLoadingMyPRs = false
+        return queryParts.joined(separator: " ")
     }
 
-    private func searchMyPRs(query: String) async -> [PullRequest] {
+    private func searchMyPRs(query: String, page: Int) async -> [PullRequest] {
         guard let token = personalAccessToken else { return [] }
 
         let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let urlString = "https://api.github.com/search/issues?q=\(encodedQuery)&sort=updated&order=desc&per_page=100"
+        let urlString = "https://api.github.com/search/issues?q=\(encodedQuery)&sort=updated&order=desc&per_page=\(myPRsPerPage)&page=\(page)"
 
         guard let url = URL(string: urlString) else { return [] }
 
@@ -512,15 +570,22 @@ class GitHubService {
             let (data, _) = try await URLSession.shared.data(for: request)
             let searchResponse = try JSONDecoder().decode(GitHubSearchResponse.self, from: data)
 
-            // Fetch full details for each PR (we need review info)
-            var detailedPRs: [PullRequest] = []
-            for item in searchResponse.items {
-                if let prDetails = await fetchPRDetails(owner: item.repositoryOwner, repo: item.repositoryName, number: item.number) {
-                    detailedPRs.append(prDetails)
+            // Fetch PR details in parallel (much faster than sequential)
+            return await withTaskGroup(of: PullRequest?.self) { group in
+                for item in searchResponse.items {
+                    group.addTask {
+                        await self.fetchPRDetails(owner: item.repositoryOwner, repo: item.repositoryName, number: item.number)
+                    }
                 }
-            }
 
-            return detailedPRs
+                var results: [PullRequest] = []
+                for await result in group {
+                    if let pr = result {
+                        results.append(pr)
+                    }
+                }
+                return results
+            }
         } catch {
             print("[Pulse] My PRs search error: \(error.localizedDescription)")
             return []

@@ -188,14 +188,14 @@ struct GitHubAuthView: View {
 
 struct PRListView: View {
     @Bindable var gitHubService: GitHubService
-    @State private var selectedTab: PRTab = .awaitingReview
+    @State private var selectedTab: PRTab = .myPRs
     @FocusState private var isFocused: Bool
     @State private var focusSink: String = ""
 
     enum PRTab: String, CaseIterable {
+        case myPRs = "My PRs"
         case awaitingReview = "Awaiting Review"
         case involved = "Involved"
-        case myPRs = "My PRs"
     }
 
     var body: some View {
@@ -373,7 +373,7 @@ struct PRListView: View {
                 }
 
                 ScrollView {
-                    if currentIsLoading {
+                    if currentIsLoading && currentPRs.isEmpty {
                         ProgressView()
                             .padding(8)
                     }
@@ -381,6 +381,23 @@ struct PRListView: View {
                         ForEach(currentPRs) { pr in
                             PRRowView(pr: pr, gitHubService: gitHubService, showReviewStatus: selectedTab == .myPRs)
                             Divider()
+                        }
+
+                        // Infinite scroll trigger for My PRs
+                        if selectedTab == .myPRs && gitHubService.myPRsHasMore {
+                            if gitHubService.isLoadingMoreMyPRs {
+                                ProgressView()
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                            } else {
+                                Color.clear
+                                    .frame(height: 1)
+                                    .onAppear {
+                                        Task {
+                                            await gitHubService.loadMoreMyPRs()
+                                        }
+                                    }
+                            }
                         }
                     }
                 }
@@ -432,7 +449,8 @@ struct PRListView: View {
         case .involved:
             return gitHubService.involvedPRs.count
         case .myPRs:
-            return gitHubService.myPRs.count
+            // Always show open PR count regardless of filter
+            return gitHubService.myOpenPRsCount
         }
     }
 }
