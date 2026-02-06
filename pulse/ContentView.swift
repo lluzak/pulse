@@ -472,7 +472,7 @@ struct MyPRsFilterBar: View {
             Task { await gitHubService.fetchMyPRs() }
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.primary.opacity(0.03))
     }
