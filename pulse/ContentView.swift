@@ -462,10 +462,6 @@ struct MyPRsFilterBar: View {
 
     var body: some View {
         HStack {
-            Text("Show:")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             Picker("", selection: $gitHubService.myPRsStateFilter) {
                 ForEach(PRStateFilter.allCases, id: \.self) { filter in
                     Text(filter.rawValue).tag(filter)
@@ -473,6 +469,7 @@ struct MyPRsFilterBar: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .frame(maxWidth: .infinity)
             .onChange(of: gitHubService.myPRsStateFilter) { _, _ in
                 Task { await gitHubService.fetchMyPRs() }
             }
