@@ -1248,7 +1248,7 @@ struct PRRowView: View {
                     
                     Spacer()
                     
-                    Text(pr.updatedDate.formatted(.relative(presentation: .named)))
+                    Text(pr.updatedDate.relativeTimeString())
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -1305,6 +1305,39 @@ struct PRRowView: View {
               let repo = pr.base.repo?.name else { return }
 
         reviewSummary = await gitHubService.fetchPRReviewSummary(owner: owner, repo: repo, number: pr.number)
+    }
+}
+
+// MARK: - Relative Time Formatter
+
+extension Date {
+    func relativeTimeString() -> String {
+        let now = Date()
+        let interval = now.timeIntervalSince(self)
+
+        if interval < 0 {
+            return "just now"
+        }
+
+        let minutes = Int(interval / 60)
+        let hours = Int(interval / 3600)
+        let days = Int(interval / 86400)
+        let weeks = Int(interval / 604800)
+        let months = Int(interval / 2592000)
+
+        if minutes < 1 {
+            return "just now"
+        } else if minutes < 60 {
+            return "\(minutes)m ago"
+        } else if hours < 24 {
+            return "\(hours)h ago"
+        } else if days < 7 {
+            return "\(days)d ago"
+        } else if weeks < 4 {
+            return "\(weeks)w ago"
+        } else {
+            return "\(months)mo ago"
+        }
     }
 }
 
