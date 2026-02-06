@@ -379,7 +379,7 @@ struct PRListView: View {
                     }
                     LazyVStack(spacing: 0) {
                         ForEach(currentPRs) { pr in
-                            PRRowView(pr: pr, gitHubService: gitHubService, showReviewStatus: selectedTab == .myPRs)
+                            PRRowView(pr: pr, gitHubService: gitHubService, showReviewStatus: selectedTab == .myPRs || selectedTab == .awaitingReview)
                             Divider()
                         }
 

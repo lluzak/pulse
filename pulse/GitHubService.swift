@@ -1176,6 +1176,12 @@ class GitHubService {
             return (.approved, reviewStatus.state, reviewStatus.submittedAt)
         }
 
+        // Check if anyone has approved the PR - if so, it's "done" and no reminder needed
+        let reviewSummary = await fetchPRReviewSummary(owner: pr.owner, repo: pr.repo, number: pr.prNumber)
+        if reviewSummary.approvedCount > 0 {
+            return (.approved, reviewStatus.state, reviewStatus.submittedAt)
+        }
+
         // If user submitted CHANGES_REQUESTED or COMMENTED
         if reviewStatus.hasReviewed, let reviewedAt = reviewStatus.submittedAt {
             // Check if author responded (PR updated after review)
