@@ -6,7 +6,7 @@ APP_NAME="Pulse"
 SCHEME="pulse"
 BUILD_DIR="build"
 DMG_NAME="Pulse"
-VERSION=$(date +"%Y.%m.%d")
+VERSION=$(xcodebuild -scheme "${SCHEME}" -showBuildSettings 2>/dev/null | grep MARKETING_VERSION | head -1 | awk '{print $3}')
 
 # Colors for output
 RED='\033[0;31m'
