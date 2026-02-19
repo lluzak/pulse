@@ -1771,5 +1771,13 @@ final class WorkingHoursTests: XCTestCase {
         let day = DaySchedule(isEnabled: false, startHour: 9, startMinute: 0, endHour: 17, endMinute: 0)
         XCTAssertFalse(day.containsTime(hour: 12, minute: 0))
     }
+
+    func testQueuedNotificationEncodingRoundtrip() throws {
+        let queued = QueuedPRNotification(prId: 123, prTitle: "Fix bug", prRepository: "org/repo", prURL: "https://github.com/org/repo/pull/1", queuedAt: Date())
+        let data = try JSONEncoder().encode([queued])
+        let decoded = try JSONDecoder().decode([QueuedPRNotification].self, from: data)
+        XCTAssertEqual(decoded.first?.prId, 123)
+        XCTAssertEqual(decoded.first?.prTitle, "Fix bug")
+    }
 }
 

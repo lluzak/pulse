@@ -102,9 +102,20 @@ class GitHubService {
 
     // Working hours
     var workingHoursSchedule: WorkingHoursSchedule = WorkingHoursSchedule.defaultSchedule() {
-        didSet { saveWorkingHoursSchedule() }
+        didSet {
+            saveWorkingHoursSchedule()
+            if workingHoursSchedule.isEnabled != oldValue.isEnabled {
+                startWorkingHoursCheck()
+            }
+        }
     }
-    var isWorkingHoursOverridden: Bool = false // "Resume now" temporary override
+    var isWorkingHoursOverridden: Bool = false // "Resume now" temporary override, intentionally not persisted
+
+    private(set) var queuedNotifications: [QueuedPRNotification] = [] {
+        didSet { saveQueuedNotifications() }
+    }
+    private var wasOutsideWorkingHours: Bool = true
+    private var workingHoursCheckTask: Task<Void, Never>?
 
     // Polling
     var isPollingEnabled: Bool = true {
@@ -175,6 +186,7 @@ class GitHubService {
         loadMyPRsActivity()
         loadMyPRNotificationSettings()
         loadWorkingHoursSchedule()
+        loadQueuedNotifications()
     }
 
     func resetLoadedState() {
@@ -185,12 +197,28 @@ class GitHubService {
     deinit {
         pollingTask?.cancel()
         reminderPollingTask?.cancel()
+        workingHoursCheckTask?.cancel()
     }
     
     // MARK: - Notifications
     
     func sendNotification(for newPRs: [PullRequest]) {
         guard !newPRs.isEmpty else { return }
+
+        if !isWithinWorkingHours() {
+            // Queue for later
+            for pr in newPRs {
+                let queued = QueuedPRNotification(
+                    prId: pr.id, prTitle: pr.title,
+                    prRepository: pr.repository, prURL: pr.htmlURL,
+                    queuedAt: Date()
+                )
+                if !queuedNotifications.contains(where: { $0.prId == pr.id }) {
+                    queuedNotifications.append(queued)
+                }
+            }
+            return
+        }
 
         // Show full-screen notification
         DispatchQueue.main.async {
@@ -324,6 +352,7 @@ class GitHubService {
         hasLoadedMyPRs = false
         previousPRIds = []
         pollingTask?.cancel()
+        workingHoursCheckTask?.cancel()
         KeychainHelper.delete(key: tokenKey)
     }
     
@@ -361,6 +390,7 @@ class GitHubService {
                 try? await Task.sleep(nanoseconds: UInt64(pollingInterval * 1_000_000_000))
             }
         }
+        startWorkingHoursCheck()
     }
     
     // MARK: - API Calls
@@ -818,7 +848,7 @@ class GitHubService {
                     body = "#\(pr.number) has conflicts: \(pr.title)"
                 }
 
-                if shouldNotify {
+                if shouldNotify && isWithinWorkingHours() {
                     await MainActor.run {
                         sendSystemNotification(title: title, body: body, prURL: pr.htmlURL)
                     }
@@ -962,6 +992,63 @@ class GitHubService {
         guard let weekday = now.weekday, let hour = now.hour, let minute = now.minute,
               let daySchedule = workingHoursSchedule.days[weekday] else { return true }
         return daySchedule.containsTime(hour: hour, minute: minute)
+    }
+
+    private func saveQueuedNotifications() {
+        if let data = try? JSONEncoder().encode(queuedNotifications) {
+            UserDefaults.standard.set(data, forKey: "queuedNotifications")
+        }
+    }
+
+    private func loadQueuedNotifications() {
+        if let data = UserDefaults.standard.data(forKey: "queuedNotifications"),
+           let queued = try? JSONDecoder().decode([QueuedPRNotification].self, from: data) {
+            queuedNotifications = queued
+        }
+    }
+
+    private func startWorkingHoursCheck() {
+        workingHoursCheckTask?.cancel()
+        guard workingHoursSchedule.isEnabled else { return }
+
+        wasOutsideWorkingHours = !isWithinWorkingHours()
+
+        workingHoursCheckTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000) // 1 minute
+                let currentlyInside = isWithinWorkingHours()
+
+                if currentlyInside && wasOutsideWorkingHours {
+                    // Transition: outside -> inside working hours
+                    await flushQueuedNotifications()
+                }
+                wasOutsideWorkingHours = !currentlyInside
+            }
+        }
+    }
+
+    private func flushQueuedNotifications() async {
+        guard !queuedNotifications.isEmpty else { return }
+        let queued = queuedNotifications
+        queuedNotifications = []
+
+        let center = UNUserNotificationCenter.current()
+        for notification in queued {
+            let content = UNMutableNotificationContent()
+            content.title = "New PR Review Request"
+            content.subtitle = notification.prRepository
+            content.body = notification.prTitle
+            content.sound = .default
+            content.userInfo = ["prURL": notification.prURL]
+            let request = UNNotificationRequest(
+                identifier: "pr-queued-\(notification.prId)", content: content, trigger: nil
+            )
+            center.add(request) { error in
+                if let error = error {
+                    print("[Pulse] Queued notification error: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     func startWatching(pr: PullRequest) {
@@ -1314,6 +1401,7 @@ class GitHubService {
     }
 
     func sendReminderNotification(for watchedPRs: [WatchedPR]) {
+        guard isWithinWorkingHours() else { return }
         DispatchQueue.main.async {
             PRNotificationWindowController.shared.showReminder(for: watchedPRs)
         }
@@ -1633,6 +1721,14 @@ struct WorkingHoursSchedule: Codable, Equatable {
             ]
         )
     }
+}
+
+struct QueuedPRNotification: Codable, Equatable {
+    let prId: Int
+    let prTitle: String
+    let prRepository: String
+    let prURL: String
+    let queuedAt: Date
 }
 
 // MARK: - My PR Notification Event Types
