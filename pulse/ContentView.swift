@@ -506,11 +506,8 @@ struct PRListView: View {
         switch tab {
         case .awaitingReview:
             return gitHubService.awaitingReviewPRs.count
-        case .involved:
-            return gitHubService.involvedPRs.count
-        case .myPRs:
-            // Always show open PR count regardless of filter
-            return gitHubService.myOpenPRsCount
+        case .involved, .myPRs:
+            return nil
         }
     }
 }
