@@ -100,6 +100,12 @@ class GitHubService {
         }
     }
 
+    // Working hours
+    var workingHoursSchedule: WorkingHoursSchedule = WorkingHoursSchedule.defaultSchedule() {
+        didSet { saveWorkingHoursSchedule() }
+    }
+    var isWorkingHoursOverridden: Bool = false // "Resume now" temporary override
+
     // Polling
     var isPollingEnabled: Bool = true {
         didSet {
@@ -168,6 +174,7 @@ class GitHubService {
         loadWatchedPRs()
         loadMyPRsActivity()
         loadMyPRNotificationSettings()
+        loadWorkingHoursSchedule()
     }
 
     func resetLoadedState() {
@@ -935,6 +942,28 @@ class GitHubService {
         }
     }
 
+    private func saveWorkingHoursSchedule() {
+        if let data = try? JSONEncoder().encode(workingHoursSchedule) {
+            UserDefaults.standard.set(data, forKey: "workingHoursSchedule")
+        }
+    }
+
+    private func loadWorkingHoursSchedule() {
+        if let data = UserDefaults.standard.data(forKey: "workingHoursSchedule"),
+           let schedule = try? JSONDecoder().decode(WorkingHoursSchedule.self, from: data) {
+            workingHoursSchedule = schedule
+        }
+    }
+
+    func isWithinWorkingHours() -> Bool {
+        guard workingHoursSchedule.isEnabled else { return true }
+        if isWorkingHoursOverridden { return true }
+        let now = Calendar.current.dateComponents([.weekday, .hour, .minute], from: Date())
+        guard let weekday = now.weekday, let hour = now.hour, let minute = now.minute,
+              let daySchedule = workingHoursSchedule.days[weekday] else { return true }
+        return daySchedule.containsTime(hour: hour, minute: minute)
+    }
+
     func startWatching(pr: PullRequest) {
         // Don't add duplicates
         guard !isWatching(prId: pr.id) else { return }
@@ -1563,6 +1592,46 @@ struct PRReviewSummary {
             return "\(pendingCount) pending"
         }
         return "No reviews"
+    }
+}
+
+// MARK: - Working Hours
+
+struct DaySchedule: Codable, Equatable {
+    var isEnabled: Bool
+    var startHour: Int
+    var startMinute: Int
+    var endHour: Int
+    var endMinute: Int
+
+    func containsTime(hour: Int, minute: Int) -> Bool {
+        guard isEnabled else { return false }
+        let timeMinutes = hour * 60 + minute
+        let startMinutes = startHour * 60 + self.startMinute
+        let endMinutes = endHour * 60 + self.endMinute
+        return timeMinutes >= startMinutes && timeMinutes < endMinutes
+    }
+}
+
+struct WorkingHoursSchedule: Codable, Equatable {
+    var isEnabled: Bool
+    var days: [Int: DaySchedule] // 1=Sunday..7=Saturday (Calendar weekday)
+
+    static func defaultSchedule() -> WorkingHoursSchedule {
+        let weekday = DaySchedule(isEnabled: true, startHour: 9, startMinute: 0, endHour: 17, endMinute: 0)
+        let weekend = DaySchedule(isEnabled: false, startHour: 9, startMinute: 0, endHour: 17, endMinute: 0)
+        return WorkingHoursSchedule(
+            isEnabled: true,
+            days: [
+                1: weekend, // Sunday
+                2: weekday, // Monday
+                3: weekday, // Tuesday
+                4: weekday, // Wednesday
+                5: weekday, // Thursday
+                6: weekday, // Friday
+                7: weekend  // Saturday
+            ]
+        )
     }
 }
 

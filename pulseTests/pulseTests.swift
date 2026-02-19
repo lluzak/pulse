@@ -1727,3 +1727,49 @@ final class GitHubServiceOAuthTests: XCTestCase {
     }
 }
 
+final class WorkingHoursTests: XCTestCase {
+    func testDefaultSchedule() {
+        let schedule = WorkingHoursSchedule.defaultSchedule()
+        XCTAssertTrue(schedule.isEnabled)
+        // Monday (weekday 2) should be enabled 9-17
+        let monday = schedule.days[2]!
+        XCTAssertTrue(monday.isEnabled)
+        XCTAssertEqual(monday.startHour, 9)
+        XCTAssertEqual(monday.startMinute, 0)
+        XCTAssertEqual(monday.endHour, 17)
+        XCTAssertEqual(monday.endMinute, 0)
+        // Sunday (weekday 1) should be disabled
+        let sunday = schedule.days[1]!
+        XCTAssertFalse(sunday.isEnabled)
+        // Saturday (weekday 7) should be disabled
+        let saturday = schedule.days[7]!
+        XCTAssertFalse(saturday.isEnabled)
+    }
+
+    func testScheduleEncodingRoundtrip() throws {
+        let schedule = WorkingHoursSchedule.defaultSchedule()
+        let data = try JSONEncoder().encode(schedule)
+        let decoded = try JSONDecoder().decode(WorkingHoursSchedule.self, from: data)
+        XCTAssertEqual(decoded.isEnabled, schedule.isEnabled)
+        XCTAssertEqual(decoded.days.count, schedule.days.count)
+        XCTAssertEqual(decoded.days[2]!.startHour, 9)
+    }
+
+    func testDayScheduleContainsTime() {
+        let day = DaySchedule(isEnabled: true, startHour: 9, startMinute: 0, endHour: 17, endMinute: 0)
+        // 10:30 is within 9:00-17:00
+        XCTAssertTrue(day.containsTime(hour: 10, minute: 30))
+        // 8:59 is before
+        XCTAssertFalse(day.containsTime(hour: 8, minute: 59))
+        // 17:00 is at boundary (end is exclusive)
+        XCTAssertFalse(day.containsTime(hour: 17, minute: 0))
+        // 16:59 is just inside
+        XCTAssertTrue(day.containsTime(hour: 16, minute: 59))
+    }
+
+    func testDisabledDayNeverContainsTime() {
+        let day = DaySchedule(isEnabled: false, startHour: 9, startMinute: 0, endHour: 17, endMinute: 0)
+        XCTAssertFalse(day.containsTime(hour: 12, minute: 0))
+    }
+}
+
