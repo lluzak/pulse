@@ -935,6 +935,68 @@ struct NotificationsTabView: View {
 
                 Divider()
 
+                // Working Hours section
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Working Hours")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Enable working hours", isOn: $gitHubService.workingHoursSchedule.isEnabled)
+
+                    Text("Suppress notifications and full-screen alerts outside your working hours. Queued notifications will be delivered when working hours start.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if gitHubService.workingHoursSchedule.isEnabled {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach([2, 3, 4, 5, 6, 7, 1], id: \.self) { weekday in
+                                if let daySchedule = gitHubService.workingHoursSchedule.days[weekday] {
+                                    WorkingHoursDayRow(
+                                        dayName: dayName(for: weekday),
+                                        schedule: Binding(
+                                            get: { gitHubService.workingHoursSchedule.days[weekday] ?? daySchedule },
+                                            set: { gitHubService.workingHoursSchedule.days[weekday] = $0 }
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        Button("Apply Monday to all weekdays") {
+                            if let monday = gitHubService.workingHoursSchedule.days[2] {
+                                for weekday in 3...6 {
+                                    gitHubService.workingHoursSchedule.days[weekday] = DaySchedule(
+                                        isEnabled: monday.isEnabled,
+                                        startHour: monday.startHour, startMinute: monday.startMinute,
+                                        endHour: monday.endHour, endMinute: monday.endMinute
+                                    )
+                                }
+                            }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.blue)
+
+                        if gitHubService.isWorkingHoursOverridden {
+                            HStack {
+                                Text("Working hours manually resumed for this session")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                Spacer()
+                                Button("Reset") {
+                                    gitHubService.isWorkingHoursOverridden = false
+                                }
+                                .font(.caption)
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.red)
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
                 // Review Reminders section
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Review Reminders")
@@ -1054,6 +1116,11 @@ struct NotificationsTabView: View {
 
     private func testNotification() {
         gitHubService.sendTestNotification()
+    }
+
+    private func dayName(for weekday: Int) -> String {
+        let formatter = DateFormatter()
+        return formatter.shortWeekdaySymbols[weekday - 1]
     }
 
     private var notificationStatusText: String {
@@ -1395,6 +1462,69 @@ extension Date {
             return "\(weeks)w ago"
         } else {
             return "\(months)mo ago"
+        }
+    }
+}
+
+// MARK: - Working Hours Day Row
+
+struct WorkingHoursDayRow: View {
+    let dayName: String
+    @Binding var schedule: DaySchedule
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: $schedule.isEnabled)
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+
+            Text(dayName)
+                .font(.caption)
+                .frame(width: 32, alignment: .leading)
+
+            if schedule.isEnabled {
+                HStack(spacing: 4) {
+                    TimePickerCompact(hour: $schedule.startHour, minute: $schedule.startMinute)
+                    Text("\u{2013}")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TimePickerCompact(hour: $schedule.endHour, minute: $schedule.endMinute)
+                }
+            } else {
+                Text("Off")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+    }
+}
+
+struct TimePickerCompact: View {
+    @Binding var hour: Int
+    @Binding var minute: Int
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Picker("", selection: $hour) {
+                ForEach(0..<24, id: \.self) { h in
+                    Text(String(format: "%02d", h)).tag(h)
+                }
+            }
+            .frame(width: 50)
+            .labelsHidden()
+
+            Text(":")
+                .font(.caption)
+
+            Picker("", selection: $minute) {
+                ForEach(Array(stride(from: 0, to: 60, by: 15)), id: \.self) { m in
+                    Text(String(format: "%02d", m)).tag(m)
+                }
+            }
+            .frame(width: 50)
+            .labelsHidden()
         }
     }
 }
