@@ -1347,7 +1347,15 @@ class GitHubService {
         var prsToRemove: [Int] = []
         var prsToUpdate: [(id: Int, reviewState: String?, reviewedAt: Date?)] = []
 
+        let awaitingIds = Set(awaitingReviewPRs.map { $0.id })
+
         for pr in watchedPRs {
+            // Only remind for PRs still in Awaiting Review
+            if !awaitingIds.contains(pr.id) {
+                prsToRemove.append(pr.id)
+                continue
+            }
+
             // Skip if not enough time passed since watching started (initial delay)
             let timeSinceStart = Date().timeIntervalSince(pr.startedWatchingAt)
             if timeSinceStart < reminderInterval {
