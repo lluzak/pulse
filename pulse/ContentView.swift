@@ -263,6 +263,8 @@ struct PRListView: View {
 
             Divider()
 
+            workingHoursBanner
+
             // Per-tab loading and content
             tabContent
 
@@ -435,6 +437,64 @@ struct PRListView: View {
         case .involved: return "No PRs you're involved with"
         case .myPRs: return "You haven't created any PRs"
         }
+    }
+
+    private var workingHoursBanner: some View {
+        Group {
+            if gitHubService.isOutsideWorkingHours {
+                HStack(spacing: 8) {
+                    Image(systemName: "moon.zzz")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text("Notifications paused until \(nextWorkingHoursStart)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Button("Resume now") {
+                        gitHubService.isWorkingHoursOverridden = true
+                    }
+                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.secondary.opacity(0.1))
+            }
+        }
+    }
+
+    private var nextWorkingHoursStart: String {
+        let schedule = gitHubService.workingHoursSchedule
+        let calendar = Calendar.current
+        let now = Date()
+
+        // Check today and next 7 days for the next enabled day
+        for dayOffset in 0..<8 {
+            guard let checkDate = calendar.date(byAdding: .day, value: dayOffset, to: now) else { continue }
+            let weekday = calendar.component(.weekday, from: checkDate)
+            guard let daySchedule = schedule.days[weekday], daySchedule.isEnabled else { continue }
+
+            var components = calendar.dateComponents([.year, .month, .day], from: checkDate)
+            components.hour = daySchedule.startHour
+            components.minute = daySchedule.startMinute
+            guard let startDate = calendar.date(from: components) else { continue }
+
+            if startDate > now {
+                let formatter = DateFormatter()
+                // If it's today, show just time; otherwise show day + time
+                if dayOffset == 0 {
+                    formatter.dateFormat = "HH:mm"
+                } else {
+                    formatter.dateFormat = "EEE HH:mm"
+                }
+                return formatter.string(from: startDate)
+            }
+        }
+        return "next working day"
     }
 
     private func tabLabel(for tab: PRTab) -> String {
