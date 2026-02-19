@@ -985,6 +985,10 @@ class GitHubService {
         }
     }
 
+    var isOutsideWorkingHours: Bool {
+        workingHoursSchedule.isEnabled && !isWorkingHoursOverridden && !isWithinWorkingHours()
+    }
+
     func isWithinWorkingHours() -> Bool {
         guard workingHoursSchedule.isEnabled else { return true }
         if isWorkingHoursOverridden { return true }

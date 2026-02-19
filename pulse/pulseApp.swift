@@ -36,6 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var eventMonitor: EventMonitor?
+    private var workingHoursObservation: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize GitHubService early to start fetching data at launch
@@ -73,6 +74,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         eventMonitor = EventMonitor(mask: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             if let popover = self?.popover, popover.isShown {
                 self?.closePopover()
+            }
+        }
+
+        // Observe working hours status for icon changes
+        workingHoursObservation = Task { @MainActor in
+            let service = GitHubService.shared
+            while !Task.isCancelled {
+                let outsideHours = service.isOutsideWorkingHours
+                if let button = statusItem?.button {
+                    let iconName = outsideHours ? "moon.zzz" : "waveform.path.ecg"
+                    button.image = NSImage(systemSymbolName: iconName, accessibilityDescription: "Pulse")
+                    button.image?.isTemplate = true
+                }
+                try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
             }
         }
 
