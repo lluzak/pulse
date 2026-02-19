@@ -487,8 +487,9 @@ class GitHubService {
 
         let sortedPRs = allPRs.sorted { $0.updatedDate > $1.updatedDate }
 
-        // Filter out dismissed PRs
-        involvedPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) }
+        // Filter out dismissed PRs and PRs already in Awaiting Review
+        let awaitingIds = Set(awaitingReviewPRs.map { $0.id })
+        involvedPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) && !awaitingIds.contains($0.id) }
         hasLoadedInvolved = true
         isLoadingInvolved = false
     }
