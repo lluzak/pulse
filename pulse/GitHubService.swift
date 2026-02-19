@@ -457,11 +457,12 @@ class GitHubService {
     }
 
     func fetchAllPRs() async {
-        // Fetch all three in parallel
-        async let awaitingTask: () = fetchPendingPRs()
+        // Fetch awaiting first so we can filter them out of involved
+        await fetchPendingPRs()
+        // Then fetch involved and myPRs in parallel
         async let involvedTask: () = fetchInvolvedPRs()
         async let myPRsTask: () = fetchMyPRs()
-        _ = await (awaitingTask, involvedTask, myPRsTask)
+        _ = await (involvedTask, myPRsTask)
     }
     
     func fetchInvolvedPRs() async {
