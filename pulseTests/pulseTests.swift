@@ -1404,6 +1404,75 @@ final class UserReviewStatusTests: XCTestCase {
     }
 }
 
+// MARK: - Re-Review Detection Tests
+
+final class ReReviewDetectionTests: XCTestCase {
+
+    func testApprovedStateIndicatesReReview() {
+        // When a PR is in review-requested results AND user has APPROVED,
+        // it means re-review was requested after the user's approval
+        let status = UserReviewStatus(hasReviewed: true, state: "APPROVED", submittedAt: Date())
+        let isReReview = status.hasReviewed
+            && (status.state == "APPROVED" || status.state == "CHANGES_REQUESTED")
+        XCTAssertTrue(isReReview)
+    }
+
+    func testChangesRequestedStateIndicatesReReview() {
+        let status = UserReviewStatus(hasReviewed: true, state: "CHANGES_REQUESTED", submittedAt: Date())
+        let isReReview = status.hasReviewed
+            && (status.state == "APPROVED" || status.state == "CHANGES_REQUESTED")
+        XCTAssertTrue(isReReview)
+    }
+
+    func testCommentedStateDoesNotIndicateReReview() {
+        // COMMENTED reviews don't indicate re-review — the user may have
+        // just left a comment without approving/requesting changes
+        let status = UserReviewStatus(hasReviewed: true, state: "COMMENTED", submittedAt: Date())
+        let isReReview = status.hasReviewed
+            && (status.state == "APPROVED" || status.state == "CHANGES_REQUESTED")
+        XCTAssertFalse(isReReview)
+    }
+
+    func testNoReviewDoesNotIndicateReReview() {
+        let status = UserReviewStatus(hasReviewed: false, state: nil, submittedAt: nil)
+        let isReReview = status.hasReviewed
+            && (status.state == "APPROVED" || status.state == "CHANGES_REQUESTED")
+        XCTAssertFalse(isReReview)
+    }
+
+    func testReReviewTrackingCleanup() {
+        // Verify that when a PR leaves the awaiting review list,
+        // its review state should be cleaned up so re-check happens if it returns
+        var previousPRReviewStates: [Int: String] = [1: "APPROVED", 2: "CHANGES_REQUESTED", 3: "APPROVED"]
+        let currentPRIds: Set<Int> = [1, 3]  // PR 2 left the list
+
+        previousPRReviewStates = previousPRReviewStates.filter { currentPRIds.contains($0.key) }
+
+        XCTAssertEqual(previousPRReviewStates.count, 2)
+        XCTAssertNotNil(previousPRReviewStates[1])
+        XCTAssertNil(previousPRReviewStates[2])  // Cleaned up
+        XCTAssertNotNil(previousPRReviewStates[3])
+    }
+
+    func testReReviewSkipsAlreadyTrackedPRs() {
+        // Once we detect a re-review for a PR, we shouldn't re-notify
+        var previousPRReviewStates: [Int: String] = [1: "APPROVED"]
+        let prId = 1
+
+        // This PR should be skipped because it's already in previousPRReviewStates
+        let shouldCheck = previousPRReviewStates[prId] == nil
+        XCTAssertFalse(shouldCheck)
+    }
+
+    func testReReviewChecksUntrackedPRs() {
+        let previousPRReviewStates: [Int: String] = [1: "APPROVED"]
+        let prId = 2  // New PR not yet tracked
+
+        let shouldCheck = previousPRReviewStates[prId] == nil
+        XCTAssertTrue(shouldCheck)
+    }
+}
+
 // MARK: - PRStateFilter Tests
 
 final class PRStateFilterTests: XCTestCase {

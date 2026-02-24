@@ -136,6 +136,8 @@ class GitHubService {
 
     // Notification tracking
     private var previousPRIds: Set<Int> = []
+    // Track user's last known review state per PR for re-review detection
+    private var previousPRReviewStates: [Int: String] = [:]  // PR ID → review state (APPROVED, CHANGES_REQUESTED)
 
     // Dismissed PRs (won't show in list)
     var dismissedPRIds: Set<Int> = [] {
@@ -442,7 +444,29 @@ class GitHubService {
 
         // Determine new PRs by comparing IDs with previousPRIds
         let currentPRIds = Set(sortedPRs.map { $0.id })
-        let newPRs = sortedPRs.filter { !previousPRIds.contains($0.id) }
+        var newPRs = sortedPRs.filter { !previousPRIds.contains($0.id) }
+
+        // Detect re-review requests for PRs already in the list
+        if hasLoadedAwaiting {
+            let existingPRs = sortedPRs.filter { previousPRIds.contains($0.id) }
+            for pr in existingPRs {
+                // Skip if we already detected a review state for this PR
+                if previousPRReviewStates[pr.id] != nil { continue }
+
+                let owner = pr.base.repo?.fullName.components(separatedBy: "/").first ?? ""
+                let repo = pr.base.repo?.name ?? ""
+                guard !owner.isEmpty, !repo.isEmpty else { continue }
+
+                let reviewStatus = await getUserReviewStatus(owner: owner, repo: repo, number: pr.number)
+                if reviewStatus.hasReviewed,
+                   let state = reviewStatus.state,
+                   state == "APPROVED" || state == "CHANGES_REQUESTED" {
+                    // User already reviewed but PR is still in review-requested → re-review requested
+                    previousPRReviewStates[pr.id] = state
+                    newPRs.append(pr)
+                }
+            }
+        }
 
         // Send notifications for new PRs (only after first load)
         if hasLoadedAwaiting && !newPRs.isEmpty {
@@ -450,6 +474,8 @@ class GitHubService {
         }
 
         previousPRIds = currentPRIds
+        // Clean up review states for PRs no longer in the awaiting review list
+        previousPRReviewStates = previousPRReviewStates.filter { currentPRIds.contains($0.key) }
         // Filter out dismissed PRs
         awaitingReviewPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) }
         hasLoadedAwaiting = true
