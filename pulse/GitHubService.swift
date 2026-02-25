@@ -1587,6 +1587,7 @@ struct PRUser: Codable {
 
 struct PRBranch: Codable {
     let ref: String
+    let sha: String?
     let repo: PRRepository?  // Can be null for deleted forks
 }
 

@@ -1473,6 +1473,43 @@ final class ReReviewDetectionTests: XCTestCase {
     }
 }
 
+// MARK: - CI Status Tests
+
+final class CIStatusTests: XCTestCase {
+
+    func testPRBranchDecodesSha() throws {
+        let json = """
+        {
+            "ref": "feature-branch",
+            "sha": "abc123def456",
+            "repo": {
+                "name": "Hello-World",
+                "full_name": "octocat/Hello-World"
+            }
+        }
+        """.data(using: .utf8)!
+
+        let branch = try JSONDecoder().decode(PRBranch.self, from: json)
+        XCTAssertEqual(branch.sha, "abc123def456")
+        XCTAssertEqual(branch.ref, "feature-branch")
+    }
+
+    func testPRBranchDecodesWithoutSha() throws {
+        let json = """
+        {
+            "ref": "feature-branch",
+            "repo": {
+                "name": "Hello-World",
+                "full_name": "octocat/Hello-World"
+            }
+        }
+        """.data(using: .utf8)!
+
+        let branch = try JSONDecoder().decode(PRBranch.self, from: json)
+        XCTAssertNil(branch.sha)
+    }
+}
+
 // MARK: - PRStateFilter Tests
 
 final class PRStateFilterTests: XCTestCase {
@@ -1702,10 +1739,12 @@ func createMockPR(
         draft: draft,
         head: PRBranch(
             ref: "feature-branch",
+            sha: nil,
             repo: PRRepository(name: "Hello-World", fullName: "octocat/Hello-World")
         ),
         base: PRBranch(
             ref: "main",
+            sha: nil,
             repo: PRRepository(name: "Hello-World", fullName: "octocat/Hello-World")
         ),
         additions: additions,
