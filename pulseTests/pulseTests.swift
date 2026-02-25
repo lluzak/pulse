@@ -1508,6 +1508,35 @@ final class CIStatusTests: XCTestCase {
         let branch = try JSONDecoder().decode(PRBranch.self, from: json)
         XCTAssertNil(branch.sha)
     }
+
+    func testDeriveCheckStatusAllSuccess() {
+        let runs: [[String: Any]] = [
+            ["status": "completed", "conclusion": "success"],
+            ["status": "completed", "conclusion": "success"],
+        ]
+        XCTAssertEqual(GitHubService.deriveCheckStatus(from: runs), "success")
+    }
+
+    func testDeriveCheckStatusAnyFailure() {
+        let runs: [[String: Any]] = [
+            ["status": "completed", "conclusion": "success"],
+            ["status": "completed", "conclusion": "failure"],
+        ]
+        XCTAssertEqual(GitHubService.deriveCheckStatus(from: runs), "failure")
+    }
+
+    func testDeriveCheckStatusPending() {
+        let runs: [[String: Any]] = [
+            ["status": "completed", "conclusion": "success"],
+            ["status": "in_progress", "conclusion": NSNull()],
+        ]
+        XCTAssertEqual(GitHubService.deriveCheckStatus(from: runs), "pending")
+    }
+
+    func testDeriveCheckStatusNoRuns() {
+        let runs: [[String: Any]] = []
+        XCTAssertNil(GitHubService.deriveCheckStatus(from: runs))
+    }
 }
 
 // MARK: - PRStateFilter Tests

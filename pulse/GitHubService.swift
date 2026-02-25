@@ -685,6 +685,56 @@ class GitHubService {
         }
     }
 
+    /// Derives overall CI status from an array of check run dictionaries.
+    static func deriveCheckStatus(from checkRuns: [[String: Any]]) -> String? {
+        if checkRuns.isEmpty { return nil }
+
+        var hasFailure = false
+        var hasPending = false
+
+        for run in checkRuns {
+            let status = run["status"] as? String ?? ""
+            let conclusion = run["conclusion"] as? String
+
+            if status == "in_progress" || status == "queued" || status == "waiting" || status == "pending" || status == "requested" {
+                hasPending = true
+            } else if let conclusion = conclusion {
+                if conclusion == "failure" || conclusion == "timed_out" || conclusion == "cancelled" {
+                    hasFailure = true
+                }
+            }
+        }
+
+        if hasFailure { return "failure" }
+        if hasPending { return "pending" }
+        return "success"
+    }
+
+    /// Fetches CI check run status for a commit SHA.
+    private func fetchCheckRunStatus(owner: String, repo: String, sha: String) async -> String? {
+        guard let token = personalAccessToken else { return nil }
+
+        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/commits/\(sha)/check-runs?per_page=100")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+                return nil
+            }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let checkRuns = json["check_runs"] as? [[String: Any]] else {
+                return nil
+            }
+            return GitHubService.deriveCheckStatus(from: checkRuns)
+        } catch {
+            print("[Pulse] Check runs fetch error (\(owner)/\(repo)@\(sha)): \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     private func fetchPRActivity(owner: String, repo: String, number: Int, pr: PullRequest) async -> PRActivity {
         // Get reviews
         let reviews = await fetchPRReviews(owner: owner, repo: repo, number: number)
