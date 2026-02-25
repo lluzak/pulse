@@ -1356,7 +1356,7 @@ struct PRRowView: View {
 
                     if let checkStatus = gitHubService.myPRsLastActivity[pr.id]?.checkStatus {
                         Image(systemName: checkStatus == "success" ? "checkmark.circle.fill" : checkStatus == "failure" ? "xmark.circle.fill" : "clock.arrow.circlepath")
-                            .font(.caption2)
+                            .font(.caption)
                             .foregroundStyle(checkStatus == "success" ? .green : checkStatus == "failure" ? .red : .yellow)
                             .help(checkStatus == "success" ? "CI passed" : checkStatus == "failure" ? "CI failed" : "CI pending")
                     }
