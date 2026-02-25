@@ -751,10 +751,13 @@ class GitHubService {
         let isMerged = pr.state == "closed" && (pr.mergedAt != nil)
         let mergedAt = pr.mergedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
 
-        // For now, we don't have easy access to conflicts or check status from search results
-        // These would require additional API calls - leave as placeholders
         let hasConflicts = false
-        let checkStatus: String? = nil
+        let checkStatus: String?
+        if let sha = pr.head.sha {
+            checkStatus = await fetchCheckRunStatus(owner: owner, repo: repo, sha: sha)
+        } else {
+            checkStatus = nil
+        }
 
         return PRActivity(
             commentCount: commentCount,
