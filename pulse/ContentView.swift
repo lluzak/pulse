@@ -1289,14 +1289,6 @@ struct PRRowView: View {
 
                     Spacer()
 
-                    // Show CI status dot for My PRs
-                    if let checkStatus = gitHubService.myPRsLastActivity[pr.id]?.checkStatus {
-                        Circle()
-                            .fill(checkStatus == "success" ? Color.green : checkStatus == "failure" ? Color.red : Color.yellow)
-                            .frame(width: 8, height: 8)
-                            .help(checkStatus == "success" ? "CI passed" : checkStatus == "failure" ? "CI failed" : "CI pending")
-                    }
-
                     // Show review status for My PRs tab
                     if showReviewStatus, let summary = reviewSummary {
                         ReviewStatusBadge(summary: summary)
@@ -1361,6 +1353,13 @@ struct PRRowView: View {
                 HStack(spacing: 12) {
                     Label("\(pr.number)", systemImage: "number")
                         .font(.caption2)
+
+                    if let checkStatus = gitHubService.myPRsLastActivity[pr.id]?.checkStatus {
+                        Image(systemName: checkStatus == "success" ? "checkmark.circle.fill" : checkStatus == "failure" ? "xmark.circle.fill" : "clock.arrow.circlepath")
+                            .font(.caption2)
+                            .foregroundStyle(checkStatus == "success" ? .green : checkStatus == "failure" ? .red : .yellow)
+                            .help(checkStatus == "success" ? "CI passed" : checkStatus == "failure" ? "CI failed" : "CI pending")
+                    }
                     
                     Label(pr.user.login, systemImage: "person.fill")
                         .font(.caption2)

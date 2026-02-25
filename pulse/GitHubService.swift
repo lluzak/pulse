@@ -537,10 +537,9 @@ class GitHubService {
 
         let sortedPRs = fetchedPRs.sorted { $0.updatedDate > $1.updatedDate }
 
-        // Check for activity changes and send notifications (only after first load)
-        if hasLoadedMyPRs {
-            await checkMyPRsForActivityChanges(sortedPRs)
-        }
+        // Check for activity changes and send notifications
+        // On first load, fetch activity (for CI status display) but skip notifications
+        await checkMyPRsForActivityChanges(sortedPRs, sendNotifications: hasLoadedMyPRs)
 
         // Filter out dismissed PRs
         myPRs = sortedPRs.filter { !dismissedPRIds.contains($0.id) }
@@ -657,7 +656,7 @@ class GitHubService {
         }
     }
 
-    private func checkMyPRsForActivityChanges(_ currentPRs: [PullRequest]) async {
+    private func checkMyPRsForActivityChanges(_ currentPRs: [PullRequest], sendNotifications: Bool = true) async {
         var eventsToNotify: [(PullRequest, [MyPRNotificationEvent])] = []
 
         for pr in currentPRs {
@@ -668,7 +667,7 @@ class GitHubService {
             let currentActivity = await fetchPRActivity(owner: owner, repo: repo, number: pr.number, pr: pr)
 
             // Compare with stored activity
-            if let previousActivity = myPRsLastActivity[pr.id] {
+            if sendNotifications, let previousActivity = myPRsLastActivity[pr.id] {
                 let events = detectActivityChanges(previous: previousActivity, current: currentActivity, pr: pr)
                 if !events.isEmpty {
                     eventsToNotify.append((pr, events))
