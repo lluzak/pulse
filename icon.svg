@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#E0E7FF"/>
+      <stop offset="50%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E0E7FF"/>
+    </linearGradient>
+  </defs>
+  <!-- Background with macOS-style rounded rect -->
+  <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="url(#bg)"/>
+  <!-- Subtle inner shadow / glow -->
+  <rect x="20" y="20" width="984" height="984" rx="210" ry="210" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="4"/>
+  <!-- Heartbeat/ECG waveform -->
+  <polyline
+    points="
+      120,530
+      250,530
+      300,530
+      340,510
+      370,560
+      410,300
+      460,750
+      510,380
+      550,580
+      590,490
+      630,530
+      750,530
+      904,530
+    "
+    fill="none"
+    stroke="url(#wave)"
+    stroke-width="48"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <!-- Small glow dot at the peak -->
+  <circle cx="410" cy="300" r="18" fill="#FFFFFF" opacity="0.7"/>
+</svg>
