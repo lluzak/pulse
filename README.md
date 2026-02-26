@@ -1,10 +1,19 @@
-# Pulse
+<p align="center">
+  <img src="pulse/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="128" height="128" alt="Pulse icon">
+</p>
 
-A lightweight macOS menu bar app for tracking GitHub Pull Requests.
+<h1 align="center">Pulse</h1>
 
-![macOS](https://img.shields.io/badge/macOS-14.0+-blue)
-![Swift](https://img.shields.io/badge/Swift-6.0-orange)
-![License](https://img.shields.io/badge/License-MIT-green)
+<p align="center">
+  <strong>Keep your finger on the pulse of GitHub pull requests.</strong><br>
+  A native macOS menu bar app that tracks PRs awaiting your review, notifies you of activity on your own PRs, and helps you stay on top of code reviews — without leaving your workflow.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-14.0+-blue" alt="macOS">
+  <img src="https://img.shields.io/badge/Swift-6.0-orange" alt="Swift">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+</p>
 
 ## Features
 
@@ -104,4 +113,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-Made with care for developers who review PRs.
+<p align="center">Made with care for developers who review PRs.</p>
