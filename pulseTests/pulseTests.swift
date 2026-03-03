@@ -33,7 +33,7 @@ final class GitHubServiceTests: XCTestCase {
         let service = GitHubService()
 
         XCTAssertTrue(service.isPollingEnabled)
-        XCTAssertEqual(service.pollingInterval, 300) // 5 minutes
+        XCTAssertEqual(service.pollingInterval, 60) // 1 minute (304s don't count against rate limit)
     }
 
     func testRepositoryMonitoringDefaults() {

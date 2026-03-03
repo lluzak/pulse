@@ -128,11 +128,16 @@ class GitHubService {
             }
         }
     }
-    var pollingInterval: TimeInterval = 300 { // 5 minutes
+    var pollingInterval: TimeInterval = 60 { // 1 minute (304s don't count against rate limit)
         didSet { UserDefaults.standard.set(pollingInterval, forKey: "pollingInterval") }
     }
     private var pollingTask: Task<Void, Never>?
     private var reminderPollingTask: Task<Void, Never>?
+
+    // ETag conditional request caching
+    private var etagCache: [String: (etag: String, data: Data)] = [:]
+    private var searchResultCache: [String: [PullRequest]] = [:]
+    private(set) var rateLimitRemaining: Int?
 
     // Notification tracking
     private var previousPRIds: Set<Int> = []
@@ -353,6 +358,8 @@ class GitHubService {
         hasLoadedInvolved = false
         hasLoadedMyPRs = false
         previousPRIds = []
+        etagCache.removeAll()
+        searchResultCache.removeAll()
         pollingTask?.cancel()
         workingHoursCheckTask?.cancel()
         KeychainHelper.delete(key: tokenKey)
@@ -631,11 +638,18 @@ class GitHubService {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, wasNotModified) = try await performConditionalRequest(for: request)
+
+            // On 304, return cached search results (skip all fetchPRDetails calls)
+            if wasNotModified, let cached = searchResultCache[urlString] {
+                print("[Pulse] Skipping fetchPRDetails for \(cached.count) My PRs (search unchanged)")
+                return cached
+            }
+
             let searchResponse = try JSONDecoder().decode(GitHubSearchResponse.self, from: data)
 
             // Fetch PR details in parallel (much faster than sequential)
-            return await withTaskGroup(of: PullRequest?.self) { group in
+            let results = await withTaskGroup(of: PullRequest?.self) { group in
                 for item in searchResponse.items {
                     group.addTask {
                         await self.fetchPRDetails(owner: item.repositoryOwner, repo: item.repositoryName, number: item.number)
@@ -650,6 +664,9 @@ class GitHubService {
                 }
                 return results
             }
+
+            searchResultCache[urlString] = results
+            return results
         } catch {
             print("[Pulse] My PRs search error: \(error.localizedDescription)")
             return []
@@ -1231,6 +1248,42 @@ class GitHubService {
         }
     }
 
+    /// Performs a conditional HTTP request using ETag caching.
+    /// Returns `(data, wasNotModified)` — on 304, returns cached data with `true`.
+    private func performConditionalRequest(for request: URLRequest) async throws -> (Data, Bool) {
+        var conditionalRequest = request
+        let cacheKey = request.url?.absoluteString ?? ""
+
+        if let cached = etagCache[cacheKey] {
+            conditionalRequest.setValue(cached.etag, forHTTPHeaderField: "If-None-Match")
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: conditionalRequest)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            return (data, false)
+        }
+
+        // Track rate limit
+        if let remaining = httpResponse.value(forHTTPHeaderField: "X-RateLimit-Remaining"),
+           let remainingInt = Int(remaining) {
+            rateLimitRemaining = remainingInt
+        }
+
+        if httpResponse.statusCode == 304, let cached = etagCache[cacheKey] {
+            print("[Pulse] 304 Not Modified for \(cacheKey.suffix(80))")
+            return (cached.data, true)
+        }
+
+        // Cache new ETag and data on success
+        if httpResponse.statusCode == 200,
+           let etag = httpResponse.value(forHTTPHeaderField: "ETag") {
+            etagCache[cacheKey] = (etag: etag, data: data)
+        }
+
+        return (data, false)
+    }
+
     private func searchPRs(query: String, username: String) async -> [PullRequest] {
         guard let token = personalAccessToken else { return [] }
         
@@ -1244,7 +1297,14 @@ class GitHubService {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, wasNotModified) = try await performConditionalRequest(for: request)
+
+            // On 304, return cached search results (skip all fetchPRDetails calls)
+            if wasNotModified, let cached = searchResultCache[urlString] {
+                print("[Pulse] Skipping fetchPRDetails for \(cached.count) PRs (search unchanged)")
+                return cached
+            }
+
             let searchResponse = try JSONDecoder().decode(GitHubSearchResponse.self, from: data)
 
             // Fetch full details for each PR
@@ -1258,6 +1318,7 @@ class GitHubService {
                 }
             }
 
+            searchResultCache[urlString] = detailedPRs
             return detailedPRs
 
         } catch let decodingError as DecodingError {
@@ -1279,7 +1340,7 @@ class GitHubService {
             return []
         }
     }
-    
+
     private func fetchPRDetails(owner: String, repo: String, number: Int) async -> PullRequest? {
         guard let token = personalAccessToken else { return nil }
 
@@ -1289,11 +1350,7 @@ class GitHubService {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
-                return nil
-            }
+            let (data, _) = try await performConditionalRequest(for: request)
 
             return try JSONDecoder().decode(PullRequest.self, from: data)
         } catch let decodingError as DecodingError {
