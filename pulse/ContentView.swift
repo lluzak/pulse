@@ -191,6 +191,7 @@ struct PRListView: View {
     @State private var selectedTab: PRTab = .myPRs
     @FocusState private var isFocused: Bool
     @State private var focusSink: String = ""
+    @State private var showingWeeklyStats: Bool = false
 
     enum PRTab: String, CaseIterable {
         case myPRs = "My PRs"
@@ -279,6 +280,14 @@ struct PRListView: View {
                 }
                 .buttonStyle(.plain)
 
+                Button(action: {
+                    showingWeeklyStats.toggle()
+                }) {
+                    Image(systemName: "chart.bar.fill")
+                }
+                .buttonStyle(.plain)
+                .help("Weekly Stats")
+
                 Spacer()
 
                 Button(action: {
@@ -291,6 +300,14 @@ struct PRListView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+        }
+        .overlay {
+            if showingWeeklyStats {
+                WeeklyStatsView(gitHubService: gitHubService, onClose: {
+                    showingWeeklyStats = false
+                })
+                .background(.regularMaterial)
+            }
         }
         .background {
             // Hidden button for Cmd+R keyboard shortcut
