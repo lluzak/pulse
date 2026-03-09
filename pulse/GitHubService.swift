@@ -1833,6 +1833,83 @@ struct PRReviewSummary {
     }
 }
 
+// MARK: - Weekly Stats Models
+
+struct RepoStats {
+    let requested: Int
+    let submitted: Int
+}
+
+struct WeeklyStats {
+    let weekStart: Date
+    let weekEnd: Date
+    let reviewsRequested: [PullRequest]
+    let reviewsSubmitted: [PullRequest]
+    let repoBreakdown: [String: RepoStats]
+    let avgTurnaroundHours: Double?
+
+    static func calendarWeekBounds(for date: Date) -> (start: Date, end: Date) {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.firstWeekday = 2 // Monday
+        let startOfDay = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: startOfDay)
+        // weekday: 1=Sun, 2=Mon, ..., 7=Sat
+        let daysFromMonday = (weekday + 5) % 7
+        let monday = calendar.date(byAdding: .day, value: -daysFromMonday, to: startOfDay)!
+        let sunday = calendar.date(byAdding: .day, value: 6, to: monday)!
+        let endOfSunday = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: sunday)!
+        return (monday, endOfSunday)
+    }
+
+    static func dateRangeQueryString(for date: Date) -> String {
+        let (start, end) = calendarWeekBounds(for: date)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return "\(formatter.string(from: start))..\(formatter.string(from: end))"
+    }
+
+    static func buildRepoBreakdown(requested: [PullRequest], submitted: [PullRequest]) -> [String: RepoStats] {
+        var reqCounts: [String: Int] = [:]
+        var subCounts: [String: Int] = [:]
+
+        for pr in requested {
+            reqCounts[pr.repository, default: 0] += 1
+        }
+        for pr in submitted {
+            subCounts[pr.repository, default: 0] += 1
+        }
+
+        let allRepos = Set(reqCounts.keys).union(subCounts.keys)
+        var breakdown: [String: RepoStats] = [:]
+        for repo in allRepos {
+            breakdown[repo] = RepoStats(
+                requested: reqCounts[repo, default: 0],
+                submitted: subCounts[repo, default: 0]
+            )
+        }
+        return breakdown
+    }
+
+    static func calculateAvgTurnaround(prCreatedDates: [String], reviewSubmittedDates: [String]) -> Double? {
+        guard !prCreatedDates.isEmpty, prCreatedDates.count == reviewSubmittedDates.count else { return nil }
+
+        let formatter = ISO8601DateFormatter()
+        var totalHours: Double = 0
+        var count = 0
+
+        for i in 0..<prCreatedDates.count {
+            if let created = formatter.date(from: prCreatedDates[i]),
+               let submitted = formatter.date(from: reviewSubmittedDates[i]) {
+                totalHours += submitted.timeIntervalSince(created) / 3600.0
+                count += 1
+            }
+        }
+
+        return count > 0 ? totalHours / Double(count) : nil
+    }
+}
+
 // MARK: - Working Hours
 
 struct DaySchedule: Codable, Equatable {

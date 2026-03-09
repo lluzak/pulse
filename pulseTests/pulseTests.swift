@@ -1742,6 +1742,124 @@ final class PRReviewSummaryTests: XCTestCase {
     }
 }
 
+// MARK: - Weekly Stats Tests
+
+final class WeeklyStatsTests: XCTestCase {
+
+    func testWeeklyStatsCreation() {
+        let monday = ISO8601DateFormatter().date(from: "2026-03-02T00:00:00Z")!
+        let sunday = ISO8601DateFormatter().date(from: "2026-03-08T23:59:59Z")!
+
+        let stats = WeeklyStats(
+            weekStart: monday,
+            weekEnd: sunday,
+            reviewsRequested: [createMockPR(id: 1), createMockPR(id: 2)],
+            reviewsSubmitted: [createMockPR(id: 3)],
+            repoBreakdown: ["octocat/Hello-World": RepoStats(requested: 2, submitted: 1)],
+            avgTurnaroundHours: 4.5
+        )
+
+        XCTAssertEqual(stats.reviewsRequested.count, 2)
+        XCTAssertEqual(stats.reviewsSubmitted.count, 1)
+        XCTAssertEqual(stats.repoBreakdown["octocat/Hello-World"]?.requested, 2)
+        XCTAssertEqual(stats.repoBreakdown["octocat/Hello-World"]?.submitted, 1)
+        XCTAssertEqual(stats.avgTurnaroundHours, 4.5)
+    }
+
+    func testWeeklyStatsEmptyState() {
+        let monday = ISO8601DateFormatter().date(from: "2026-03-02T00:00:00Z")!
+        let sunday = ISO8601DateFormatter().date(from: "2026-03-08T23:59:59Z")!
+
+        let stats = WeeklyStats(
+            weekStart: monday,
+            weekEnd: sunday,
+            reviewsRequested: [],
+            reviewsSubmitted: [],
+            repoBreakdown: [:],
+            avgTurnaroundHours: nil
+        )
+
+        XCTAssertTrue(stats.reviewsRequested.isEmpty)
+        XCTAssertTrue(stats.reviewsSubmitted.isEmpty)
+        XCTAssertTrue(stats.repoBreakdown.isEmpty)
+        XCTAssertNil(stats.avgTurnaroundHours)
+    }
+
+    func testCalendarWeekBounds() {
+        // Wednesday March 4, 2026
+        let wednesday = ISO8601DateFormatter().date(from: "2026-03-04T14:30:00Z")!
+        let (start, end) = WeeklyStats.calendarWeekBounds(for: wednesday)
+
+        let calendar = Calendar(identifier: .iso8601)
+        // Should be Monday March 2
+        XCTAssertEqual(calendar.component(.weekday, from: start), 2) // Monday
+        XCTAssertEqual(calendar.component(.day, from: start), 2)
+        // Should be Sunday March 8
+        XCTAssertEqual(calendar.component(.weekday, from: end), 1) // Sunday
+        XCTAssertEqual(calendar.component(.day, from: end), 8)
+    }
+
+    func testCalendarWeekBoundsOnMonday() {
+        let monday = ISO8601DateFormatter().date(from: "2026-03-02T00:00:00Z")!
+        let (start, _) = WeeklyStats.calendarWeekBounds(for: monday)
+
+        let calendar = Calendar(identifier: .iso8601)
+        XCTAssertEqual(calendar.component(.day, from: start), 2)
+    }
+
+    func testCalendarWeekBoundsOnSunday() {
+        let sunday = ISO8601DateFormatter().date(from: "2026-03-08T12:00:00Z")!
+        let (start, end) = WeeklyStats.calendarWeekBounds(for: sunday)
+
+        let calendar = Calendar(identifier: .iso8601)
+        XCTAssertEqual(calendar.component(.day, from: start), 2)
+        XCTAssertEqual(calendar.component(.day, from: end), 8)
+    }
+
+    func testRepoBreakdownGrouping() {
+        let pr1 = createMockPR(id: 1)  // octocat/Hello-World
+        let pr2 = createMockPR(id: 2)  // octocat/Hello-World
+        let pr3 = PullRequest(
+            id: 3, number: 456, title: "Other repo PR", body: nil,
+            htmlURL: "https://github.com/org/other-repo/pull/456",
+            state: "open", createdAt: "2026-03-04T10:00:00Z",
+            updatedAt: "2026-03-04T12:00:00Z",
+            user: PRUser(login: "someone", avatarURL: "https://example.com/a.jpg"),
+            draft: false,
+            head: PRBranch(ref: "feat", sha: nil, repo: PRRepository(name: "other-repo", fullName: "org/other-repo")),
+            base: PRBranch(ref: "main", sha: nil, repo: PRRepository(name: "other-repo", fullName: "org/other-repo")),
+            additions: 5, deletions: 2, changedFiles: 1, mergedAt: nil
+        )
+
+        let breakdown = WeeklyStats.buildRepoBreakdown(
+            requested: [pr1, pr2, pr3],
+            submitted: [pr1, pr3]
+        )
+
+        XCTAssertEqual(breakdown.count, 2)
+        XCTAssertEqual(breakdown["octocat/Hello-World"]?.requested, 2)
+        XCTAssertEqual(breakdown["octocat/Hello-World"]?.submitted, 1)
+        XCTAssertEqual(breakdown["org/other-repo"]?.requested, 1)
+        XCTAssertEqual(breakdown["org/other-repo"]?.submitted, 1)
+    }
+
+    func testTurnaroundCalculation() {
+        let turnaround = WeeklyStats.calculateAvgTurnaround(
+            prCreatedDates: ["2026-03-04T10:00:00Z", "2026-03-05T08:00:00Z"],
+            reviewSubmittedDates: ["2026-03-04T14:00:00Z", "2026-03-05T12:00:00Z"]
+        )
+        XCTAssertEqual(turnaround!, 4.0, accuracy: 0.01)
+    }
+
+    func testTurnaroundCalculationEmpty() {
+        let turnaround = WeeklyStats.calculateAvgTurnaround(
+            prCreatedDates: [],
+            reviewSubmittedDates: []
+        )
+        XCTAssertNil(turnaround)
+    }
+}
+
 // MARK: - Test Helpers
 
 func createMockPR(
