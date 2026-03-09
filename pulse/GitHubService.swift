@@ -51,6 +51,11 @@ class GitHubService {
     var myOpenPRsCount: Int = 0
     private let myPRsPerPage = 20
 
+    // Weekly stats
+    var weeklyStats: WeeklyStats?
+    var isLoadingWeeklyStats: Bool = false
+    var weeklyStatsError: String?
+
     // Activity tracking for My PRs notifications
     var myPRsLastActivity: [Int: PRActivity] = [:] {
         didSet { saveMyPRsActivity() }
@@ -1559,6 +1564,132 @@ class GitHubService {
     func openPRInBrowser(_ pr: PullRequest) {
         if let url = URL(string: pr.htmlURL) {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    // MARK: - Weekly Stats
+
+    private func searchPRsForStats(query: String) async -> [PullRequest] {
+        guard let token = personalAccessToken else { return [] }
+
+        let perPage = 30
+        var page = 1
+        var allResults: [PullRequest] = []
+
+        while true {
+            let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            let urlString = "https://api.github.com/search/issues?q=\(encodedQuery)&sort=updated&order=desc&per_page=\(perPage)&page=\(page)"
+
+            guard let url = URL(string: urlString) else { break }
+
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+            do {
+                let (data, _) = try await URLSession.shared.data(for: request)
+                let searchResponse = try JSONDecoder().decode(GitHubSearchResponse.self, from: data)
+
+                let results = await withTaskGroup(of: PullRequest?.self) { group in
+                    for item in searchResponse.items {
+                        group.addTask {
+                            await self.fetchPRDetails(owner: item.repositoryOwner, repo: item.repositoryName, number: item.number)
+                        }
+                    }
+
+                    var results: [PullRequest] = []
+                    for await result in group {
+                        if let pr = result {
+                            results.append(pr)
+                        }
+                    }
+                    return results
+                }
+
+                allResults.append(contentsOf: results)
+
+                if searchResponse.items.count < perPage {
+                    break
+                }
+                page += 1
+            } catch {
+                print("[Pulse] Stats search error: \(error.localizedDescription)")
+                break
+            }
+        }
+
+        return allResults
+    }
+
+    func fetchWeeklyStats(for date: Date) async {
+        guard let username = currentUser?.login else { return }
+
+        isLoadingWeeklyStats = true
+        weeklyStatsError = nil
+
+        let dateRange = WeeklyStats.dateRangeQueryString(for: date)
+        let (weekStart, weekEnd) = WeeklyStats.calendarWeekBounds(for: date)
+
+        let requestedQuery = "type:pr review-requested:\(username) updated:\(dateRange)"
+        let reviewedQuery = "type:pr reviewed-by:\(username) updated:\(dateRange)"
+
+        async let requestedPRs = searchPRsForStats(query: requestedQuery)
+        async let reviewedPRs = searchPRsForStats(query: reviewedQuery)
+
+        let requested = await requestedPRs
+        let reviewed = await reviewedPRs
+
+        // Calculate turnaround times
+        var prCreatedDates: [String] = []
+        var reviewSubmittedDates: [String] = []
+
+        for pr in reviewed {
+            if let firstReview = await fetchFirstUserReview(
+                owner: pr.base.repo?.fullName.split(separator: "/").first.map(String.init) ?? "",
+                repo: pr.base.repo?.name ?? "",
+                number: pr.number,
+                username: username
+            ) {
+                prCreatedDates.append(pr.createdAt)
+                reviewSubmittedDates.append(firstReview)
+            }
+        }
+
+        let breakdown = WeeklyStats.buildRepoBreakdown(requested: requested, submitted: reviewed)
+        let avgTurnaround = WeeklyStats.calculateAvgTurnaround(
+            prCreatedDates: prCreatedDates,
+            reviewSubmittedDates: reviewSubmittedDates
+        )
+
+        weeklyStats = WeeklyStats(
+            weekStart: weekStart,
+            weekEnd: weekEnd,
+            reviewsRequested: requested,
+            reviewsSubmitted: reviewed,
+            repoBreakdown: breakdown,
+            avgTurnaroundHours: avgTurnaround
+        )
+
+        isLoadingWeeklyStats = false
+    }
+
+    private func fetchFirstUserReview(owner: String, repo: String, number: Int, username: String) async -> String? {
+        guard let token = personalAccessToken, !owner.isEmpty, !repo.isEmpty else { return nil }
+
+        let urlString = "https://api.github.com/repos/\(owner)/\(repo)/pulls/\(number)/reviews"
+        guard let url = URL(string: urlString) else { return nil }
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let reviews = try JSONDecoder().decode([PRReview].self, from: data)
+            let userReview = reviews.first { $0.user.login == username && $0.state != "PENDING" }
+            return userReview?.submittedAt
+        } catch {
+            return nil
         }
     }
 }
