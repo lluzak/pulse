@@ -284,6 +284,7 @@ struct PRListView: View {
                     showingWeeklyStats.toggle()
                 }) {
                     Image(systemName: "chart.bar.fill")
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .help("Weekly Stats")
