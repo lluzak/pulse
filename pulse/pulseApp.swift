@@ -235,6 +235,9 @@ class PRNotificationWindowController {
                 self?.dismiss()
             },
             onDismiss: { [weak self] in
+                for pr in prs {
+                    GitHubService.shared.dismissPR(id: pr.id)
+                }
                 self?.dismiss()
             }
         )
@@ -537,25 +540,15 @@ struct FullScreenPRNotificationView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     .buttonStyle(.plain)
-                    .keyboardShortcut(.escape)
 
-                    if !isReminder && prs.count == 1, let pr = prs.first {
-                        // Open PR button
-                        Button(action: { onOpen(pr) }) {
-                            Text("Open PR")
-                                .font(.headline)
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 32)
-                                .padding(.vertical, 14)
-                                .background(Color.white.opacity(0.2))
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                        .buttonStyle(.plain)
-
-                        // Snooze 5 min button
+                    if !isReminder {
                         if let onSnooze = onSnooze {
-                            Button(action: { onSnooze(pr, 5) }) {
-                                Text("5 min")
+                            Button(action: {
+                                for pr in prs {
+                                    onSnooze(pr, 10)
+                                }
+                            }) {
+                                Text("10 min")
                                     .font(.headline)
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 32)
@@ -564,7 +557,20 @@ struct FullScreenPRNotificationView: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
                             .buttonStyle(.plain)
-                            .keyboardShortcut(.return)
+                            .keyboardShortcut(.escape)
+                        }
+
+                        if prs.count == 1, let pr = prs.first {
+                            Button(action: { onOpen(pr) }) {
+                                Text("Open PR")
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 32)
+                                    .padding(.vertical, 14)
+                                    .background(Color.white.opacity(0.2))
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
 
